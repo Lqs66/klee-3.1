@@ -119,6 +119,10 @@ cl::OptionCategory
 cl::OptionCategory TestGenCat("Test generation options",
                               "These options impact test generation.");
 
+cl::OptionCategory SplitCat(
+    "Split options",
+    "These options used to control scope of code analysis.");                           
+                              
 cl::opt<std::string> MaxTime(
     "max-time",
     cl::desc("Halt execution after the specified duration.  "
@@ -135,6 +139,32 @@ cl::opt<bool> SingleObjectResolution(
 } // namespace klee
 
 namespace {
+
+/*** Split options ***/
+
+cl::opt<bool> EnableSplit(
+    "enable-split",
+    llvm::cl::desc("Enable split mode for targeted code analysis"),
+    llvm::cl::init(false),
+    cl::cat(SplitCat));
+
+cl::opt<unsigned> MaxCallDepth(
+    "max-call-depth",
+    llvm::cl::desc("Maximum function call depth for exploration"),
+    llvm::cl::init(0), // 0 means no limit
+    cl::cat(SplitCat));
+
+cl::opt<std::string> TargetBasicBlocks(
+    "target-basic-blocks",
+    llvm::cl::desc("Path of file containing target basic blocks for split mode"),
+    llvm::cl::init(""),
+    cl::cat(SplitCat));
+
+cl::opt<float> CoverageThreshold(
+    "coverage",
+    llvm::cl::desc("Target coverage percentage (0-100)"),
+    llvm::cl::init(100.0), // 100% coverage by default
+    cl::cat(SplitCat));
 
 /*** Test generation options ***/
 
