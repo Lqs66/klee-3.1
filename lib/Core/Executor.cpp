@@ -5118,6 +5118,13 @@ void Executor::initializeSplitMode() {
   totalBasicBlocks = 0;
   coveredBasicBlocks = 0;
   
+  // Validate coverage threshold
+  if (CoverageThreshold < 0.0 || CoverageThreshold > 100.0) {
+    klee_warning("Invalid coverage threshold %.1f%%, using default 100.0%%", 
+                 CoverageThreshold.getValue());
+    CoverageThreshold = 100.0;
+  }
+  
   if (!TargetBasicBlocks.empty()) {
     loadTargetBasicBlocks(TargetBasicBlocks);
   }
@@ -5159,7 +5166,14 @@ bool Executor::checkCallDepth(ExecutionState &state) const {
     return true; // No limit or split mode disabled
   }
   
-  return state.stack.size() <= MaxCallDepth;
+  bool withinLimit = state.stack.size() <= MaxCallDepth;
+  
+  if (!withinLimit) {
+    klee_message("Call depth limit exceeded: %zu > %u", 
+                 state.stack.size(), MaxCallDepth.getValue());
+  }
+  
+  return withinLimit;
 }
 
 void Executor::updateCoverage(llvm::BasicBlock *bb) {
@@ -5176,8 +5190,12 @@ void Executor::updateCoverage(llvm::BasicBlock *bb) {
     coveredBasicBlocks++;
     
     double currentCoverage = (coveredBasicBlocks * 100.0) / totalBasicBlocks;
-    klee_message("Covered basic block, coverage: %u/%u (%.1f%%)", 
-                 coveredBasicBlocks, totalBasicBlocks, currentCoverage);
+    
+    // Only log coverage updates periodically to avoid spam
+    if (coveredBasicBlocks % 10 == 0 || currentCoverage >= CoverageThreshold) {
+      klee_message("Split mode coverage update: %u/%u (%.1f%%)", 
+                   coveredBasicBlocks, totalBasicBlocks, currentCoverage);
+    }
   }
 }
 
