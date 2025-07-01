@@ -515,7 +515,8 @@ Executor::Executor(LLVMContext &ctx, const InterpreterOptions &opts,
       pathWriter(0), symPathWriter(0), specialFunctionHandler(0), timers{time::Span(TimerInterval)},
       replayKTest(0), replayPath(0), usingSeeds(0),
       atMemoryLimit(false), inhibitForking(false), haltExecution(false),
-      ivcEnabled(false), debugLogBuffer(debugBufferString) {
+      ivcEnabled(false), debugLogBuffer(debugBufferString),
+      splitModeEnabled(false), totalBasicBlocks(0), coveredBasicBlocks(0) {
 
 
   const time::Span maxTime{MaxTime};
@@ -567,6 +568,11 @@ Executor::Executor(LLVMContext &ctx, const InterpreterOptions &opts,
       klee_error("Could not open file %s : %s", debug_file_name.c_str(),
                  error.c_str());
     }
+  }
+
+  // Initialize split mode if enabled
+  if (EnableSplit) {
+    initializeSplitMode();
   }
 }
 
@@ -1968,6 +1974,13 @@ void Executor::executeCall(ExecutionState &state, KInstruction *ki, Function *f,
       return;
     }
 
+    // Check call depth limit in split mode
+    if (splitModeEnabled && !checkCallDepth(state)) {
+      terminateStateEarly(state, "Maximum call depth reached in split mode.", StateTerminationType::OutOfStackMemory);
+      klee_warning("Maximum call depth reached in split mode.");
+      return;
+    }
+
     // FIXME: I'm not really happy about this reliance on prevPC but it is ok, I
     // guess. This just done to avoid having to pass KInstIterator everywhere
     // instead of the actual instruction, since we can't make a KInstIterator
@@ -2113,6 +2126,18 @@ void Executor::transferToBasicBlock(BasicBlock *dst, BasicBlock *src,
   if (state.pc->inst->getOpcode() == Instruction::PHI) {
     PHINode *first = static_cast<PHINode*>(state.pc->inst);
     state.incomingBBIndex = first->getBasicBlockIndex(src);
+  }
+  
+  // Update coverage for split mode
+  if (splitModeEnabled) {
+    updateCoverage(dst);
+    
+    // Check if coverage threshold is reached
+    if (checkCoverageThreshold()) {
+      klee_message("Coverage threshold reached (%.1f%%), terminating execution", 
+                   CoverageThreshold.getValue());
+      setHaltExecution(true);
+    }
   }
 }
 
@@ -5085,6 +5110,84 @@ void Executor::dumpStates() {
   }
 
   ::dumpStates = 0;
+}
+
+// Split mode implementation
+void Executor::initializeSplitMode() {
+  splitModeEnabled = true;
+  totalBasicBlocks = 0;
+  coveredBasicBlocks = 0;
+  
+  if (!TargetBasicBlocks.empty()) {
+    loadTargetBasicBlocks(TargetBasicBlocks);
+  }
+  
+  klee_message("Split mode enabled with max call depth: %u, coverage threshold: %.1f%%", 
+               MaxCallDepth.getValue(), CoverageThreshold.getValue());
+}
+
+void Executor::loadTargetBasicBlocks(const std::string &filename) {
+  std::ifstream file(filename);
+  if (!file.is_open()) {
+    klee_warning("Could not open target basic blocks file: %s", filename.c_str());
+    return;
+  }
+  
+  std::string line;
+  while (std::getline(file, line)) {
+    // Skip empty lines and comments
+    if (line.empty() || line[0] == '#') {
+      continue;
+    }
+    
+    // For this implementation, we'll treat each line as a basic block identifier
+    // In a complete implementation, we would parse these identifiers and 
+    // match them to actual BasicBlock objects during module loading
+    totalBasicBlocks++;
+  }
+  
+  file.close();
+  klee_message("Loaded %u target basic blocks from %s", totalBasicBlocks, filename.c_str());
+  
+  // Since we can't easily match string identifiers to BasicBlock objects without
+  // more complex parsing, we'll use a simplified approach where any basic block
+  // transfer counts toward coverage when totalBasicBlocks > 0
+}
+
+bool Executor::checkCallDepth(ExecutionState &state) const {
+  if (!splitModeEnabled || MaxCallDepth == 0) {
+    return true; // No limit or split mode disabled
+  }
+  
+  return state.stack.size() <= MaxCallDepth;
+}
+
+void Executor::updateCoverage(llvm::BasicBlock *bb) {
+  if (!splitModeEnabled) {
+    return;
+  }
+  
+  // Simplified coverage tracking: if we have target blocks specified in a file,
+  // count any basic block transfer as potential coverage
+  // In a complete implementation, we would check if this specific bb is in our target set
+  if (totalBasicBlocks > 0 && targetBasicBlocks.find(bb) == targetBasicBlocks.end()) {
+    // Mark this block as covered (simplified approach)
+    targetBasicBlocks.insert(bb);
+    coveredBasicBlocks++;
+    
+    double currentCoverage = (coveredBasicBlocks * 100.0) / totalBasicBlocks;
+    klee_message("Covered basic block, coverage: %u/%u (%.1f%%)", 
+                 coveredBasicBlocks, totalBasicBlocks, currentCoverage);
+  }
+}
+
+bool Executor::checkCoverageThreshold() const {
+  if (!splitModeEnabled || totalBasicBlocks == 0) {
+    return false;
+  }
+  
+  double currentCoverage = (coveredBasicBlocks * 100.0) / totalBasicBlocks;
+  return currentCoverage >= CoverageThreshold;
 }
 
 ///

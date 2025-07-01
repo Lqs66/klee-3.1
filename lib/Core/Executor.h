@@ -208,6 +208,12 @@ private:
   /// Typeids used during exception handling
   std::vector<ref<Expr>> eh_typeids;
 
+  /// Split mode state tracking
+  bool splitModeEnabled;
+  std::set<llvm::BasicBlock*> targetBasicBlocks;
+  unsigned totalBasicBlocks;
+  unsigned coveredBasicBlocks;
+
   /// Return the typeid corresponding to a certain `type_info`
   ref<ConstantExpr> getEhTypeidFor(ref<Expr> type_info);
 
@@ -241,6 +247,13 @@ private:
                             KInstruction *target,
                             KCallable *callable,
                             std::vector< ref<Expr> > &arguments);
+
+  /// Split mode helper methods
+  void initializeSplitMode();
+  void loadTargetBasicBlocks(const std::string &filename);
+  bool checkCallDepth(ExecutionState &state) const;
+  void updateCoverage(llvm::BasicBlock *bb);
+  bool checkCoverageThreshold() const;
 
   ObjectState *bindObjectInState(ExecutionState &state, const MemoryObject *mo,
                                  bool isLocal, const Array *array = 0);

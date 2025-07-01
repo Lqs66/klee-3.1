@@ -1,0 +1,18 @@
+# Target basic blocks for split mode testing
+# This file contains identifiers for basic blocks we want to track
+# In a complete implementation, these would be actual basic block identifiers
+
+# Main function entry
+main_entry
+
+# Factorial function blocks  
+factorial_entry
+factorial_recursive
+
+# Fibonacci function blocks
+fibonacci_entry
+fibonacci_recursive
+
+# Conditional branches
+if_branch_factorial
+if_branch_fibonacci
