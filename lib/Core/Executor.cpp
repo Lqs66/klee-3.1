@@ -154,17 +154,17 @@ cl::opt<unsigned> MaxCallDepth(
     llvm::cl::init(0), // 0 means no limit
     cl::cat(SplitCat));
 
-cl::opt<std::string> TargetBasicBlocks(
-    "target-basic-blocks",
-    llvm::cl::desc("Path of file containing target basic blocks for split mode"),
-    llvm::cl::init(""),
-    cl::cat(SplitCat));
+// cl::opt<std::string> TargetBasicBlocks(
+//     "target-basic-blocks",
+//     llvm::cl::desc("Path of file containing target basic blocks for split mode"),
+//     llvm::cl::init(""),
+//     cl::cat(SplitCat));
 
-cl::opt<float> CoverageThreshold(
-    "coverage",
-    llvm::cl::desc("Target coverage percentage (0-100)"),
-    llvm::cl::init(100.0), // 100% coverage by default
-    cl::cat(SplitCat));
+// cl::opt<float> CoverageThreshold(
+//     "coverage",
+//     llvm::cl::desc("Target coverage percentage (0-100)"),
+//     llvm::cl::init(100.0), // 100% coverage by default
+//     cl::cat(SplitCat));
 
 /*** Test generation options ***/
 
@@ -517,6 +517,14 @@ Executor::Executor(LLVMContext &ctx, const InterpreterOptions &opts,
       atMemoryLimit(false), inhibitForking(false), haltExecution(false),
       ivcEnabled(false), debugLogBuffer(debugBufferString) {
 
+  if (EnableSplit) {
+    klee_message("Split mode enabled");
+    if (MaxCallDepth > 0) {
+      klee_message("Maximum call depth set to: %u", MaxCallDepth.getValue());
+    } else {
+      klee_message("No call depth limit (MaxCallDepth = 0)");
+    }
+  }
 
   const time::Span maxTime{MaxTime};
   if (maxTime) timers.add(
@@ -2583,6 +2591,24 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
         first = false;
         free = res.second;
       } while (free);
+    }
+
+    if (EnableSplit && MaxCallDepth > 0) {
+
+      uint64_t curr_call_depth = -1; // We need to filter out the initial
+                                     // call frame, so we start at -1.
+      for (const auto &frame : state.stack) {
+        if (!frame.kf->getName().startswith("klee_")) {
+          curr_call_depth++;
+          // klee_message("Call frame: %s", frame.kf->function->getName().data());
+        }
+      }
+      if (curr_call_depth > MaxCallDepth) {
+        klee_warning("Path ID: %u, current call depth: %lu, maximum allowed: %u", state.id, curr_call_depth, MaxCallDepth.getValue());
+        terminateStateEarly(state, "Maximum call depth exceeded in split mode", 
+                            StateTerminationType::MaxDepth);
+        return;
+      }
     }
     break;
   }
