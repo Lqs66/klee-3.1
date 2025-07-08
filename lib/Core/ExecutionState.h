@@ -248,6 +248,9 @@ public:
   /// @brief Disables forking for this state. Set by user code
   bool forkDisabled = false;
 
+  /// @brief Maps branch instruction to the number of times it has been forked
+  std::map<const llvm::Instruction*, std::uint32_t> _brForks;
+
   /// @brief Mapping symbolic address expressions to concrete base addresses
   using base_addrs_t = std::map<ref<Expr>, ref<ConstantExpr>>;
   base_addrs_t base_addrs;

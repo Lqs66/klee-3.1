@@ -154,10 +154,10 @@ cl::opt<unsigned> MaxCallDepth(
     llvm::cl::init(0), // 0 means no limit
     cl::cat(SplitCat));
 
-cl::opt<unsigned> MaxForkssPerInst(
-    "max-forks-per-br",
+cl::opt<unsigned> MaxForkssPerBr(
+    "max-br-forks",
     llvm::cl::desc("Maximum number of forks per instruction in split mode"),
-    llvm::cl::init(5), // Default value
+    llvm::cl::init(0), // 0 means no limit
     cl::cat(SplitCat));
 
 /*** Test generation options ***/
@@ -518,6 +518,12 @@ Executor::Executor(LLVMContext &ctx, const InterpreterOptions &opts,
     } else {
       klee_message("No call depth limit (MaxCallDepth = 0)");
     }
+  }
+
+  if (!EnableSplit && MaxForkssPerBr.getNumOccurrences() > 0) {
+    klee_warning("MaxForkssPerBr is set to %u but EnableSplit is disabled. "
+                 "MaxForkssPerBr will have no effect unless --enable-split is used.",
+                 MaxForkssPerBr.getValue());
   }
 
   const time::Span maxTime{MaxTime};
@@ -2256,25 +2262,26 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
       assert(bi->getCondition() == bi->getOperand(0) &&
              "Wrong operand index!");
 
-      if (EnableSplit && MaxForkssPerInst > 0){
-        auto it = _forkCountPerInst.find(bi);
-        unsigned curr_forks = (it != _forkCountPerInst.end()) ? it->second : 0;
+      if (EnableSplit && MaxForkssPerBr > 0){
+        
+        auto it = state._brForks.find(bi);
+        unsigned curr_forks = (it != state._brForks.end()) ? it->second : 0;
 
-        if (curr_forks >= MaxForkssPerInst){
+        if (curr_forks >= MaxForkssPerBr){
           ref<Expr> cond = eval(ki, 0, state).value;
           cond = optimizer.optimizeExpr(cond, false);
-          // 将条件具体化
+
           ref<ConstantExpr> value;
           bool success = solver->getValue(state.constraints, cond, value, state.queryMetaData);
           assert(success && "FIXME: Unhandled solver failure");
           (void) success;
           
-          klee_warning("BR instruction at %s exceeded max branches per br (%u), concretizing condition to %s",
-                      state.pc->getSourceLocation().c_str(), 
-                      MaxForkssPerInst.getValue(),
-                      value->isTrue() ? "true" : "false");
+          klee_warning("BR instruction exceeded max forks/br (%u), State ID: %u, Current forks: %u, concretizing condition to %s",
+             MaxForkssPerBr.getValue(),
+             state.getID(),
+             curr_forks,
+             value->isTrue() ? "true" : "false");
           
-          // 添加约束并选择分支
           addConstraint(state, EqExpr::create(cond, value));
           if (value->isTrue()) {
             transferToBasicBlock(bi->getSuccessor(0), bi->getParent(), state);
@@ -2290,10 +2297,11 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
       cond = optimizer.optimizeExpr(cond, false);
       Executor::StatePair branches = fork(state, cond, false, BranchType::Conditional);
 
-      if (EnableSplit && MaxForkssPerInst > 0 && (branches.first || branches.second)) {
-        // 只有当实际产生了分支时才增加计数
+      if (EnableSplit && MaxForkssPerBr > 0 && (branches.first || branches.second)) {
         if (branches.first && branches.second) {
-          _forkCountPerInst[bi]++;
+          state._brForks[bi]++;
+          if (branches.first) branches.first->_brForks[bi] = state._brForks[bi];
+          if (branches.second) branches.second->_brForks[bi] = state._brForks[bi];
         }
       }
 

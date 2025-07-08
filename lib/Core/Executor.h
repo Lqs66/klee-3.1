@@ -105,7 +105,6 @@ public:
   RNG theRNG;
 
 private:
-  std::map<const llvm::Instruction*, unsigned> _forkCountPerInst;
   std::unique_ptr<KModule> kmodule;
   InterpreterHandler *interpreterHandler;
   Searcher *searcher;
