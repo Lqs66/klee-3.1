@@ -38,7 +38,7 @@ public:
    * into args[0].
    */
   bool executeCall(KCallable *callable, llvm::Instruction *i,
-                   uint64_t *args);
+                   uint64_t *args, int roundingMode);
   void *resolveSymbol(const std::string &name);
 
   int getLastErrno();

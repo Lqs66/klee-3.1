@@ -18,6 +18,8 @@
 
 #include "Z3Solver.h"
 #include "Z3Builder.h"
+#include "Z3BitvectorBuilder.h"
+#include "Z3CoreBuilder.h"
 
 #include "klee/Expr/Constraints.h"
 #include "klee/Expr/Assignment.h"
@@ -26,6 +28,7 @@
 #include "klee/Solver/SolverImpl.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Support/ErrorHandling.h"
 
 #include <memory>
 
@@ -53,13 +56,13 @@ llvm::cl::opt<unsigned>
                      llvm::cl::cat(klee::SolvingCat));
 }
 
-#include "llvm/Support/ErrorHandling.h"
 
 namespace klee {
 
 class Z3SolverImpl : public SolverImpl {
 private:
   std::unique_ptr<Z3Builder> builder;
+  Z3BuilderType builderType;
   time::Span timeout;
   SolverRunStatus runStatusCode;
   std::unique_ptr<llvm::raw_fd_ostream> dumpedQueriesFile;
@@ -74,7 +77,7 @@ private:
   bool validateZ3Model(::Z3_solver &theSolver, ::Z3_model &theModel);
 
 public:
-  Z3SolverImpl();
+  Z3SolverImpl(Z3BuilderType type);
   ~Z3SolverImpl();
 
   std::string getConstraintLog(const Query &) override;
@@ -102,18 +105,38 @@ public:
   SolverRunStatus getOperationStatusCode();
 };
 
-Z3SolverImpl::Z3SolverImpl()
-    : builder(new Z3Builder(
-          /*autoClearConstructCache=*/false,
-          /*z3LogInteractionFileArg=*/Z3LogInteractionFile.size() > 0
-              ? Z3LogInteractionFile.c_str()
-              : NULL)),
-      runStatusCode(SOLVER_RUN_STATUS_FAILURE) {
+Z3SolverImpl::Z3SolverImpl(Z3BuilderType type)
+    : builderType(type), runStatusCode(SOLVER_RUN_STATUS_FAILURE) {
+  switch (type) {
+    case KLEE_CORE:
+      builder = std::unique_ptr<Z3Builder>(new Z3CoreBuilder(
+              /*autoClearConstructCache=*/false,
+              /*z3LogInteractionFile=*/!Z3LogInteractionFile.empty()
+                                          ? Z3LogInteractionFile.c_str()
+                                          : nullptr));
+        break;
+    case KLEE_BITVECTOR:
+      builder = std::unique_ptr<Z3Builder>(new Z3BitvectorBuilder(
+              /*autoClearConstructCache=*/false,
+              /*z3LogInteractionFile=*/!Z3LogInteractionFile.empty()
+                                          ? Z3LogInteractionFile.c_str()
+                                          : nullptr));
+        break;
+  }
   assert(builder && "unable to create Z3Builder");
   solverParameters = Z3_mk_params(builder->ctx);
   Z3_params_inc_ref(builder->ctx, solverParameters);
   timeoutParamStrSymbol = Z3_mk_string_symbol(builder->ctx, "timeout");
   setCoreSolverTimeout(timeout);
+
+  // HACK: This changes Z3's handling of the `to_ieee_bv` function so that
+  // we get a signal bit pattern interpretation for NaN. At the time of writing
+  // without this option Z3 sometimes generates models which don't satisfy the
+  // original constraints.
+  //
+  // See https://github.com/Z3Prover/z3/issues/740 .
+  // https://github.com/Z3Prover/z3/issues/507
+  Z3_global_param_set("rewriter.hi_fp_unspecified", "true");
 
   if (!Z3QueryDumpFile.empty()) {
     std::string error;
@@ -139,7 +162,7 @@ Z3SolverImpl::~Z3SolverImpl() {
   Z3_params_dec_ref(builder->ctx, solverParameters);
 }
 
-Z3Solver::Z3Solver() : Solver(std::make_unique<Z3SolverImpl>()) {}
+Z3Solver::Z3Solver(Z3BuilderType type) : Solver(std::make_unique<Z3SolverImpl>(type)) {}
 
 std::string Z3Solver::getConstraintLog(const Query &query) {
   return impl->getConstraintLog(query);
@@ -156,11 +179,22 @@ std::string Z3SolverImpl::getConstraintLog(const Query &query) {
   // cache.
   // NOTE: The builder does not set `z3LogInteractionFile` to avoid conflicting
   // with whatever the solver's builder is set to do.
-  Z3Builder temp_builder(/*autoClearConstructCache=*/false,
-                         /*z3LogInteractionFile=*/NULL);
+  std::unique_ptr<Z3Builder> temp_builder;
+  switch (builderType) {
+      case KLEE_CORE:
+          temp_builder = std::make_unique<Z3CoreBuilder>(
+                  /*autoClearConstructCache=*/false,
+                  /*z3LogInteractionFile=*/nullptr);
+          break;
+      case KLEE_BITVECTOR:
+          temp_builder = std::make_unique<Z3BitvectorBuilder>(
+                  /*autoClearConstructCache=*/false,
+                  /*z3LogInteractionFile=*/nullptr);
+          break;
+  }
   ConstantArrayFinder constant_arrays_in_query;
   for (auto const &constraint : query.constraints) {
-    assumptions.push_back(temp_builder.construct(constraint));
+    assumptions.push_back(temp_builder->construct(constraint));
     constant_arrays_in_query.visit(constraint);
   }
 
@@ -170,15 +204,15 @@ std::string Z3SolverImpl::getConstraintLog(const Query &query) {
   // the negation of the equivalent i.e.
   // ∃ X Constraints(X) ∧ ¬ query(X)
   Z3ASTHandle formula = Z3ASTHandle(
-      Z3_mk_not(temp_builder.ctx, temp_builder.construct(query.expr)),
-      temp_builder.ctx);
+      Z3_mk_not(temp_builder->ctx, temp_builder->construct(query.expr)),
+      temp_builder->ctx);
   constant_arrays_in_query.visit(query.expr);
 
   for (auto const &constant_array : constant_arrays_in_query.results) {
-    assert(temp_builder.constant_array_assertions.count(constant_array) == 1 &&
+    assert(temp_builder->constant_array_assertions.count(constant_array) == 1 &&
            "Constant array found in query, but not handled by Z3Builder");
     for (auto const &arrayIndexValueExpr :
-         temp_builder.constant_array_assertions[constant_array]) {
+         temp_builder->constant_array_assertions[constant_array]) {
       assumptions.push_back(arrayIndexValueExpr);
     }
   }
@@ -186,7 +220,7 @@ std::string Z3SolverImpl::getConstraintLog(const Query &query) {
   std::vector<::Z3_ast> raw_assumptions{assumptions.cbegin(),
                                         assumptions.cend()};
   ::Z3_string result = Z3_benchmark_to_smtlib_string(
-      temp_builder.ctx,
+      temp_builder->ctx,
       /*name=*/"Emited by klee::Z3SolverImpl::getConstraintLog()",
       /*logic=*/"",
       /*status=*/"unknown",
@@ -200,7 +234,7 @@ std::string Z3SolverImpl::getConstraintLog(const Query &query) {
   // `formula`.
   raw_assumptions.clear();
   assumptions.clear();
-  formula = Z3ASTHandle(NULL, temp_builder.ctx);
+  formula = Z3ASTHandle(NULL, temp_builder->ctx);
 
   return {result};
 }
@@ -286,6 +320,14 @@ bool Z3SolverImpl::internalRunSolver(
       builder->ctx, theSolver,
       Z3ASTHandle(Z3_mk_not(builder->ctx, z3QueryExpr), builder->ctx));
 
+  // Assert an generated side constraints we have to this last so that all other
+  // constraints have been traversed so we have all the side constraints needed.
+  for (std::vector<Z3ASTHandle>::iterator it = builder->sideConstraints.begin(),
+               ie = builder->sideConstraints.end(); it != ie; ++it) {
+    Z3ASTHandle sideConstraint = *it;
+    Z3_solver_assert(builder->ctx, theSolver, sideConstraint);
+  }
+
   if (dumpedQueriesFile) {
     *dumpedQueriesFile << "; start Z3 query\n";
     *dumpedQueriesFile << Z3_solver_to_string(builder->ctx, theSolver);
@@ -306,7 +348,7 @@ bool Z3SolverImpl::internalRunSolver(
   // ``Query`` rather than only sharing within a single call to
   // ``builder->construct()``.
   builder->clearConstructCache();
-
+  builder->clearSideConstraints();
   if (runStatusCode == SolverImpl::SOLVER_RUN_STATUS_SUCCESS_SOLVABLE ||
       runStatusCode == SolverImpl::SOLVER_RUN_STATUS_SUCCESS_UNSOLVABLE) {
     if (hasSolution) {
@@ -315,6 +357,9 @@ bool Z3SolverImpl::internalRunSolver(
       ++stats::queriesValid;
     }
     return true; // success
+  }
+  if (runStatusCode == SolverImpl::SOLVER_RUN_STATUS_INTERRUPTED) {
+    raise(SIGINT);
   }
   if (runStatusCode == SolverImpl::SOLVER_RUN_STATUS_INTERRUPTED) {
     raise(SIGINT);

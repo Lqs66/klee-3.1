@@ -29,6 +29,9 @@ add_library(kleaverSolver
   STPSolver.cpp
   ValidatingSolver.cpp
   Z3Builder.cpp
+  Z3BitvectorBuilder.cpp
+  Z3CoreBuilder.cpp
+  Z3HashConfig.cpp
   Z3Solver.cpp
 )
 

@@ -55,6 +55,7 @@
 #include "klee/Support/OptionCategories.h"
 #include "klee/System/MemoryUsage.h"
 #include "klee/System/Time.h"
+#include "klee/Support/RoundingModeUtil.h"
 
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/StringExtras.h"
@@ -502,6 +503,30 @@ cl::opt<bool> DebugCheckForImpliedValues(
 extern "C" unsigned dumpStates, dumpExecutionTree;
 unsigned dumpStates = 0, dumpExecutionTree = 0;
 
+const std::unordered_set <Intrinsic::ID> Executor::supportedFPIntrinsics = {
+  //Intrinsic::fabs, //handled individually because of its presence in mainline KLEE
+  Intrinsic::sqrt,
+  Intrinsic::maxnum,
+  Intrinsic::minnum,
+  // Intrinsic::fma, // handled individually because of its presence in mainline KLEE
+  Intrinsic::trunc,
+  Intrinsic::rint
+};
+
+const std::unordered_set <Intrinsic::ID> Executor::modelledFPIntrinsics = {
+  Intrinsic::ceil,
+  Intrinsic::copysign,
+  Intrinsic::cos,
+  Intrinsic::exp2,
+  Intrinsic::exp,
+  Intrinsic::floor,
+  Intrinsic::log10,
+  Intrinsic::log2,
+  Intrinsic::log,
+  Intrinsic::round,
+  Intrinsic::sin
+};
+
 Executor::Executor(LLVMContext &ctx, const InterpreterOptions &opts,
                    InterpreterHandler *ih)
     : Interpreter(opts), interpreterHandler(ih), searcher(0),
@@ -685,7 +710,7 @@ void Executor::initializeGlobalObject(ExecutionState &state, ObjectState *os,
                              offset + i*elementSize);
   } else if (!isa<UndefValue>(c) && !isa<MetadataAsValue>(c)) {
     unsigned StoreBits = targetData->getTypeStoreSizeInBits(c->getType());
-    ref<ConstantExpr> C = evalConstant(c);
+    ref<ConstantExpr> C = evalConstant(c, state.roundingMode);
 
     // Extend the constant if necessary;
     assert(StoreBits >= C->getWidth() && "Invalid store size!");
@@ -720,7 +745,7 @@ void Executor::initializeGlobals(ExecutionState &state) {
   allocateGlobalObjects(state);
 
   // initialize aliases first, may be needed for global objects
-  initializeGlobalAliases();
+  initializeGlobalAliases(state);
 
   // finally, do the actual initialization
   initializeGlobalObjects(state);
@@ -837,7 +862,7 @@ void Executor::allocateGlobalObjects(ExecutionState &state) {
   }
 }
 
-void Executor::initializeGlobalAlias(const llvm::Constant *c) {
+void Executor::initializeGlobalAlias(const llvm::Constant *c, ExecutionState &state) {
   // aliasee may either be a global value or constant expression
   const auto *ga = dyn_cast<GlobalAlias>(c);
   if (ga) {
@@ -859,19 +884,19 @@ void Executor::initializeGlobalAlias(const llvm::Constant *c) {
 
   // resolve aliases in all sub-expressions
   for (const auto *op : c->operand_values()) {
-    initializeGlobalAlias(cast<Constant>(op));
+    initializeGlobalAlias(cast<Constant>(op), state);
   }
 
   if (ga) {
     // aliasee is constant expression (or global alias)
-    globalAddresses.emplace(ga, evalConstant(ga->getAliasee()));
+    globalAddresses.emplace(ga, evalConstant(ga->getAliasee(), state.roundingMode));
   }
 }
 
-void Executor::initializeGlobalAliases() {
+void Executor::initializeGlobalAliases(ExecutionState &state) {
   const Module *m = kmodule->module.get();
   for (const GlobalAlias &a : m->aliases()) {
-    initializeGlobalAlias(&a);
+    initializeGlobalAlias(&a, state);
   }
 }
 
@@ -1750,6 +1775,26 @@ void Executor::executeCall(ExecutionState &state, KInstruction *ki, Function *f,
   if (isa_and_nonnull<DbgInfoIntrinsic>(i))
     return;
   if (f && f->isDeclaration()) {
+#ifndef ENABLE_FP
+    Intrinsic::ID id = f->getIntrinsicID();
+    if (supportedFPIntrinsics.find(id) != supportedFPIntrinsics.end()) {
+      klee_warning("unimplemented intrinsic: %s", f->getName().data());
+      klee_message("You may enable this intrinsic by passing the following options"
+        " to cmake:\n"
+        "\"-DENABLE_FLOATING_POINT=ON\"\n");
+      terminateStateOnError(state, "unimplemented intrinsic", StateTerminationType::Unhandled);
+      return;
+    }
+    if (modelledFPIntrinsics.find(id) != modelledFPIntrinsics.end()) {
+      klee_warning("unimplemented intrinsic: %s", f->getName().data());
+      klee_message("You may enable this intrinsic by passing the following options"
+        " to cmake:\n"
+        "\"-DENABLE_FLOATING_POINT=ON\"\n"
+        "\"-DENABLE_FP_RUNTIME=ON\"\n");
+        terminateStateOnError(state, "unimplemented intrinsic", StateTerminationType::Unhandled);
+        return;
+    }
+#endif
     switch (f->getIntrinsicID()) {
     case Intrinsic::not_intrinsic: {
       // state may be destroyed by this call, cannot touch
@@ -1757,6 +1802,7 @@ void Executor::executeCall(ExecutionState &state, KInstruction *ki, Function *f,
       break;
     }
     case Intrinsic::fabs: {
+#ifndef ENABLE_FP
       ref<ConstantExpr> arg =
           toConstant(state, arguments[0], "floating point");
       if (!fpWidthToSemantics(arg->getWidth()))
@@ -1768,11 +1814,36 @@ void Executor::executeCall(ExecutionState &state, KInstruction *ki, Function *f,
       Res = llvm::abs(Res);
 
       bindLocal(ki, state, ConstantExpr::alloc(Res.bitcastToAPInt()));
+#else
+      ref<Expr> op = eval(ki, 1, state).value;
+      ref<Expr> result = FAbsExpr::create(op);
+      bindLocal(ki, state, result);
+#endif
       break;
     }
-
+    case Intrinsic::sqrt: {
+        ref<Expr> op = eval(ki, 1, state).value;
+        ref<Expr> result = FSqrtExpr::create(op, state.roundingMode);
+        bindLocal(ki, state, result);
+        break;
+    }
+    case Intrinsic::maxnum:
+    case Intrinsic::minnum: {
+        ref<Expr> op1 = eval(ki, 1, state).value;
+        ref<Expr> op2 = eval(ki, 2, state).value;
+        assert(op1->getWidth() == op2->getWidth() && "type mismatch");
+        ref<Expr> result;
+        if (f->getIntrinsicID() == Intrinsic::maxnum) {
+            result = FMaxExpr::create(op1, op2, state.roundingMode);
+        } else {
+            result = FMinExpr::create(op1, op2, state.roundingMode);
+        }
+        bindLocal(ki, state, result);
+        break;
+    }
     case Intrinsic::fma:
     case Intrinsic::fmuladd: {
+#ifndef ENABLE_FP
       // Both fma and fmuladd support float, double and fp80.  Note, that fp80
       // is not mentioned in the documentation of fmuladd, nevertheless, it is
       // still supported.  For details see
@@ -1803,6 +1874,33 @@ void Executor::executeCall(ExecutionState &state, KInstruction *ki, Function *f,
           APFloat::rmNearestTiesToEven);
 
       bindLocal(ki, state, ConstantExpr::alloc(Res.bitcastToAPInt()));
+#else
+      ref<Expr> op1 = eval(ki, 1, state).value;
+      ref<Expr> op2 = eval(ki, 2, state).value;
+      ref<Expr> op3 = eval(ki, 3, state).value;
+      assert(op1->getWidth() == op2->getWidth() && op2->getWidth() == op3->getWidth() && "type mismatch");
+      ref<Expr> result = FAddExpr::create(FMulExpr::create(op1, op2, state.roundingMode), op3, state.roundingMode);
+      bindLocal(ki, state, result);
+#endif
+      break;
+    }
+
+    case Intrinsic::trunc: {
+      FPTruncInst *fi = cast<FPTruncInst>(i);
+      Expr::Width resultType = getWidthForLLVMType(fi->getType());
+      ref<Expr> arg = eval(ki, 0, state).value;
+      if (!fpWidthToSemantics(arg->getWidth()) || !fpWidthToSemantics(resultType))
+          return terminateStateOnExecError(state, "Unsupported FPTrunc operation");
+      if (arg->getWidth() <= resultType)
+          return terminateStateOnExecError(state, "Invalid FPTrunc");
+      ref<Expr> result = FPTruncExpr::create(arg, resultType, state.roundingMode);
+      bindLocal(ki, state, result);
+      break;
+    }
+    case Intrinsic::rint: {
+      ref<Expr> arg = eval(ki, 0, state).value;
+      ref<Expr> result = FRintExpr::create(arg, state.roundingMode);
+      bindLocal(ki, state, result);
       break;
     }
 
@@ -2421,7 +2519,7 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
 
       // Iterate through all non-default cases and order them by expressions
       for (auto i : si->cases()) {
-        ref<Expr> value = evalConstant(i.getCaseValue());
+        ref<Expr> value = evalConstant(i.getCaseValue(), state.roundingMode);
 
         BasicBlock *caseSuccessor = i.getCaseSuccessor();
         expressionOrder.insert(std::make_pair(value, caseSuccessor));
@@ -3003,6 +3101,7 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
 
     // Floating point instructions
   case Instruction::FNeg: {
+#ifndef ENABLE_FP
     ref<ConstantExpr> arg =
         toConstant(state, eval(ki, 0, state).value, "floating point");
     if (!fpWidthToSemantics(arg->getWidth()))
@@ -3011,10 +3110,15 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
     llvm::APFloat Res(*fpWidthToSemantics(arg->getWidth()), arg->getAPValue());
     Res = llvm::neg(Res);
     bindLocal(ki, state, ConstantExpr::alloc(Res.bitcastToAPInt()));
+#else
+    ref<Expr> expr = eval(ki, 0, state).value;
+    bindLocal(ki, state, FNegExpr::create(expr));
+#endif
     break;
   }
 
   case Instruction::FAdd: {
+#ifndef ENABLE_FP
     ref<ConstantExpr> left = toConstant(state, eval(ki, 0, state).value,
                                         "floating point");
     ref<ConstantExpr> right = toConstant(state, eval(ki, 1, state).value,
@@ -3026,10 +3130,20 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
     llvm::APFloat Res(*fpWidthToSemantics(left->getWidth()), left->getAPValue());
     Res.add(APFloat(*fpWidthToSemantics(right->getWidth()),right->getAPValue()), APFloat::rmNearestTiesToEven);
     bindLocal(ki, state, ConstantExpr::alloc(Res.bitcastToAPInt()));
+#else
+    ref<Expr> left = eval(ki, 0, state).value;
+    ref<Expr> right = eval(ki, 1, state).value;
+    if (!fpWidthToSemantics(left->getWidth()) ||
+        !fpWidthToSemantics(right->getWidth()))
+        return terminateStateOnExecError(state, "Unsupported FAdd operation");
+    ref<Expr> result = FAddExpr::create(left, right, state.roundingMode);
+    bindLocal(ki, state, result);
+#endif
     break;
   }
 
   case Instruction::FSub: {
+#ifndef ENABLE_FP
     ref<ConstantExpr> left = toConstant(state, eval(ki, 0, state).value,
                                         "floating point");
     ref<ConstantExpr> right = toConstant(state, eval(ki, 1, state).value,
@@ -3040,10 +3154,20 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
     llvm::APFloat Res(*fpWidthToSemantics(left->getWidth()), left->getAPValue());
     Res.subtract(APFloat(*fpWidthToSemantics(right->getWidth()), right->getAPValue()), APFloat::rmNearestTiesToEven);
     bindLocal(ki, state, ConstantExpr::alloc(Res.bitcastToAPInt()));
+#else
+    ref<Expr> left = eval(ki, 0, state).value;
+    ref<Expr> right = eval(ki, 1, state).value;
+    if (!fpWidthToSemantics(left->getWidth()) ||
+        !fpWidthToSemantics(right->getWidth()))
+        return terminateStateOnExecError(state, "Unsupported FSub operation");
+    ref<Expr> result = FSubExpr::create(left, right, state.roundingMode);
+    bindLocal(ki, state, result);
+#endif
     break;
   }
 
   case Instruction::FMul: {
+#ifndef ENABLE_FP
     ref<ConstantExpr> left = toConstant(state, eval(ki, 0, state).value,
                                         "floating point");
     ref<ConstantExpr> right = toConstant(state, eval(ki, 1, state).value,
@@ -3055,10 +3179,20 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
     llvm::APFloat Res(*fpWidthToSemantics(left->getWidth()), left->getAPValue());
     Res.multiply(APFloat(*fpWidthToSemantics(right->getWidth()), right->getAPValue()), APFloat::rmNearestTiesToEven);
     bindLocal(ki, state, ConstantExpr::alloc(Res.bitcastToAPInt()));
+#else
+    ref<Expr> left = eval(ki, 0, state).value;
+    ref<Expr> right = eval(ki, 1, state).value;
+    if (!fpWidthToSemantics(left->getWidth()) ||
+        !fpWidthToSemantics(right->getWidth()))
+        return terminateStateOnExecError(state, "Unsupported FMul operation");
+    ref<Expr> result = FMulExpr::create(left, right, state.roundingMode);
+    bindLocal(ki, state, result);
+#endif
     break;
   }
 
   case Instruction::FDiv: {
+#ifndef ENABLE_FP
     ref<ConstantExpr> left = toConstant(state, eval(ki, 0, state).value,
                                         "floating point");
     ref<ConstantExpr> right = toConstant(state, eval(ki, 1, state).value,
@@ -3070,10 +3204,20 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
     llvm::APFloat Res(*fpWidthToSemantics(left->getWidth()), left->getAPValue());
     Res.divide(APFloat(*fpWidthToSemantics(right->getWidth()), right->getAPValue()), APFloat::rmNearestTiesToEven);
     bindLocal(ki, state, ConstantExpr::alloc(Res.bitcastToAPInt()));
+#else
+    ref<Expr> left = eval(ki, 0, state).value;
+    ref<Expr> right = eval(ki, 1, state).value;
+    if (!fpWidthToSemantics(left->getWidth()) ||
+        !fpWidthToSemantics(right->getWidth()))
+        return terminateStateOnExecError(state, "Unsupported FDiv operation");
+    ref<Expr> result = FDivExpr::create(left, right, state.roundingMode);
+    bindLocal(ki, state, result);
+#endif
     break;
   }
 
   case Instruction::FRem: {
+#ifndef ENABLE_FP
     ref<ConstantExpr> left = toConstant(state, eval(ki, 0, state).value,
                                         "floating point");
     ref<ConstantExpr> right = toConstant(state, eval(ki, 1, state).value,
@@ -3085,10 +3229,20 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
     Res.mod(
         APFloat(*fpWidthToSemantics(right->getWidth()), right->getAPValue()));
     bindLocal(ki, state, ConstantExpr::alloc(Res.bitcastToAPInt()));
+#else
+    ref<Expr> left = eval(ki, 0, state).value;
+    ref<Expr> right = eval(ki, 1, state).value;
+    if (!fpWidthToSemantics(left->getWidth()) ||
+        !fpWidthToSemantics(right->getWidth()))
+        return terminateStateOnExecError(state, "Unsupported FRem operation");
+    ref<Expr> result = FRemExpr::create(left, right, state.roundingMode);
+    bindLocal(ki, state, result);
+#endif
     break;
   }
 
   case Instruction::FPTrunc: {
+#ifndef ENABLE_FP
     FPTruncInst *fi = cast<FPTruncInst>(i);
     Expr::Width resultType = getWidthForLLVMType(fi->getType());
     ref<ConstantExpr> arg = toConstant(state, eval(ki, 0, state).value,
@@ -3102,10 +3256,22 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
                 llvm::APFloat::rmNearestTiesToEven,
                 &losesInfo);
     bindLocal(ki, state, ConstantExpr::alloc(Res));
+#else
+    FPTruncInst *fi = cast<FPTruncInst>(i);
+    Expr::Width resultType = getWidthForLLVMType(fi->getType());
+    ref<Expr> arg = eval(ki, 0, state).value;
+    if (!fpWidthToSemantics(arg->getWidth()) || !fpWidthToSemantics(resultType))
+        return terminateStateOnExecError(state, "Unsupported FPTrunc operation");
+    if (arg->getWidth() <= resultType)
+        return terminateStateOnExecError(state, "Invalid FPTrunc");
+    ref<Expr> result = FPTruncExpr::create(arg, resultType, state.roundingMode);
+    bindLocal(ki, state, result);
+#endif
     break;
   }
 
   case Instruction::FPExt: {
+#ifndef ENABLE_FP
     FPExtInst *fi = cast<FPExtInst>(i);
     Expr::Width resultType = getWidthForLLVMType(fi->getType());
     ref<ConstantExpr> arg = toConstant(state, eval(ki, 0, state).value,
@@ -3118,10 +3284,22 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
                 llvm::APFloat::rmNearestTiesToEven,
                 &losesInfo);
     bindLocal(ki, state, ConstantExpr::alloc(Res));
+#else
+    FPExtInst *fi = cast<FPExtInst>(i);
+    Expr::Width resultType = getWidthForLLVMType(fi->getType());
+    ref<Expr> arg = eval(ki, 0, state).value;
+    if (!fpWidthToSemantics(arg->getWidth()) || !fpWidthToSemantics(resultType))
+        return terminateStateOnExecError(state, "Unsupported FPExt operation");
+    if (arg->getWidth() >= resultType)
+        return terminateStateOnExecError(state, "Invalid FPExt");
+    ref<Expr> result = FPExtExpr::create(arg, resultType);
+    bindLocal(ki, state, result);
+#endif
     break;
   }
 
   case Instruction::FPToUI: {
+#ifndef ENABLE_FP
     FPToUIInst *fi = cast<FPToUIInst>(i);
     Expr::Width resultType = getWidthForLLVMType(fi->getType());
     ref<ConstantExpr> arg = toConstant(state, eval(ki, 0, state).value,
@@ -3140,10 +3318,22 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
     Arg.convertToInteger(valueRef, resultType, false,
                          llvm::APFloat::rmTowardZero, &isExact);
     bindLocal(ki, state, ConstantExpr::alloc(value, resultType));
+#else
+    FPToUIInst *fi = cast<FPToUIInst>(i);
+    Expr::Width resultType = getWidthForLLVMType(fi->getType());
+    ref<Expr> arg = eval(ki, 0, state).value;
+    if (!fpWidthToSemantics(arg->getWidth()) || resultType > 64)
+        return terminateStateOnExecError(state, "Unsupported FPToUI operation");
+    // LLVM IR Ref manual says that it rounds toward zero
+    ref<Expr> result =
+            FPToUIExpr::create(arg, resultType, llvm::APFloat::rmTowardZero);
+    bindLocal(ki, state, result);
+#endif
     break;
   }
 
   case Instruction::FPToSI: {
+#ifndef ENABLE_FP
     FPToSIInst *fi = cast<FPToSIInst>(i);
     Expr::Width resultType = getWidthForLLVMType(fi->getType());
     ref<ConstantExpr> arg = toConstant(state, eval(ki, 0, state).value,
@@ -3162,10 +3352,22 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
     Arg.convertToInteger(valueRef, resultType, true,
                          llvm::APFloat::rmTowardZero, &isExact);
     bindLocal(ki, state, ConstantExpr::alloc(value, resultType));
+#else
+    FPToSIInst *fi = cast<FPToSIInst>(i);
+    Expr::Width resultType = getWidthForLLVMType(fi->getType());
+    ref<Expr> arg = eval(ki, 0, state).value;
+    if (!fpWidthToSemantics(arg->getWidth()) || resultType > 64)
+      return terminateStateOnExecError(state, "Unsupported FPToSI operation");
+    // LLVM IR Ref manual says that it rounds toward zero
+    ref<Expr> result =
+      FPToSIExpr::create(arg, resultType, llvm::APFloat::rmTowardZero);
+    bindLocal(ki, state, result);
+#endif
     break;
   }
 
   case Instruction::UIToFP: {
+#ifndef ENABLE_FP
     UIToFPInst *fi = cast<UIToFPInst>(i);
     Expr::Width resultType = getWidthForLLVMType(fi->getType());
     ref<ConstantExpr> arg = toConstant(state, eval(ki, 0, state).value,
@@ -3178,10 +3380,21 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
                        llvm::APFloat::rmNearestTiesToEven);
 
     bindLocal(ki, state, ConstantExpr::alloc(f));
+#else
+    UIToFPInst *fi = cast<UIToFPInst>(i);
+    Expr::Width resultType = getWidthForLLVMType(fi->getType());
+    ref<Expr> arg = eval(ki, 0, state).value;
+    const llvm::fltSemantics *semantics = fpWidthToSemantics(resultType);
+    if (!semantics)
+        return terminateStateOnExecError(state, "Unsupported UIToFP operation");
+    ref<Expr> result = UIToFPExpr::create(arg, resultType, state.roundingMode);
+    bindLocal(ki, state, result);
+#endif
     break;
   }
 
   case Instruction::SIToFP: {
+#ifndef ENABLE_FP
     SIToFPInst *fi = cast<SIToFPInst>(i);
     Expr::Width resultType = getWidthForLLVMType(fi->getType());
     ref<ConstantExpr> arg = toConstant(state, eval(ki, 0, state).value,
@@ -3194,10 +3407,21 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
                        llvm::APFloat::rmNearestTiesToEven);
 
     bindLocal(ki, state, ConstantExpr::alloc(f));
+#else
+    SIToFPInst *fi = cast<SIToFPInst>(i);
+    Expr::Width resultType = getWidthForLLVMType(fi->getType());
+    ref<Expr> arg = eval(ki, 0, state).value;
+    const llvm::fltSemantics *semantics = fpWidthToSemantics(resultType);
+    if (!semantics)
+        return terminateStateOnExecError(state, "Unsupported SIToFP operation");
+    ref<Expr> result = SIToFPExpr::create(arg, resultType, state.roundingMode);
+    bindLocal(ki, state, result);
+#endif
     break;
   }
 
   case Instruction::FCmp: {
+#ifndef ENABLE_FP
     FCmpInst *fi = cast<FCmpInst>(i);
     ref<ConstantExpr> left = toConstant(state, eval(ki, 0, state).value,
                                         "floating point");
@@ -3278,6 +3502,16 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
     }
 
     bindLocal(ki, state, ConstantExpr::alloc(Result, Expr::Bool));
+#else
+    FCmpInst *fi = cast<FCmpInst>(i);
+    ref<Expr> left = eval(ki, 0, state).value;
+    ref<Expr> right = eval(ki, 1, state).value;
+    if (!fpWidthToSemantics(left->getWidth()) ||
+        !fpWidthToSemantics(right->getWidth()))
+        return terminateStateOnExecError(state, "Unsupported FCmp operation");
+    ref<Expr> result = evaluateFCmp(fi->getPredicate(), left, right);
+    bindLocal(ki, state, result);
+#endif
     break;
   }
   case Instruction::InsertValue: {
@@ -3535,7 +3769,7 @@ void Executor::computeOffsetsSeqTy(KGEPInstruction *kgepi,
   const Value *operand = it.getOperand();
   if (const Constant *c = dyn_cast<Constant>(operand)) {
     ref<ConstantExpr> index =
-        evalConstant(c)->SExt(Context::get().getPointerWidth());
+        evalConstant(c, llvm::APFloat::rmNearestTiesToEven)->SExt(Context::get().getPointerWidth());
     ref<ConstantExpr> addend = index->Mul(
         ConstantExpr::alloc(elementSize, Context::get().getPointerWidth()));
     constantOffset = constantOffset->Add(addend);
@@ -3628,7 +3862,7 @@ void Executor::bindInstructionConstants(KInstruction *KI) {
   }
 }
 
-void Executor::bindModuleConstants() {
+void Executor::bindModuleConstants(ExecutionState &state) {
   for (auto &kfp : kmodule->functions) {
     KFunction *kf = kfp.get();
     for (unsigned i=0; i<kf->numInstructions; ++i)
@@ -3639,7 +3873,7 @@ void Executor::bindModuleConstants() {
       std::unique_ptr<Cell[]>(new Cell[kmodule->constants.size()]);
   for (unsigned i=0; i<kmodule->constants.size(); ++i) {
     Cell &c = kmodule->constantTable[i];
-    c.value = evalConstant(kmodule->constants[i]);
+    c.value = evalConstant(kmodule->constants[i], state.roundingMode);
   }
 }
 
@@ -3698,7 +3932,7 @@ void Executor::doDumpStates() {
 }
 
 void Executor::run(ExecutionState &initialState) {
-  bindModuleConstants();
+  bindModuleConstants(initialState);
 
   // Delay init till now so that ticks don't accrue during optimization and such.
   timers.reset();
@@ -4213,7 +4447,15 @@ void Executor::callExternalFunction(ExecutionState &state, KInstruction *target,
       klee_warning_once(callable->getValue(), "%s", os.str().c_str());
   }
 
-  bool success = externalDispatcher->executeCall(callable, target->inst, args);
+  int roundingMode = LLVMRoundingModeToCRoundingMode(state.roundingMode);
+  if (roundingMode == -1) {
+      std::string msg("Cannot set rounding mode for external call to ");
+      msg += LLVMRoundingModeToString(state.roundingMode);
+      terminateStateOnError(state, msg, StateTerminationType::External);
+      return;
+  }
+
+  bool success = externalDispatcher->executeCall(callable, target->inst, args, roundingMode);
   if (!success) {
     terminateStateOnExecError(state,
                               "failed external call: " + callable->getName(),

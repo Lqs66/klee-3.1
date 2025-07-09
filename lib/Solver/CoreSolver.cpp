@@ -46,7 +46,13 @@ std::unique_ptr<Solver> createCoreSolver(CoreSolverType cst) {
   case Z3_SOLVER:
 #ifdef ENABLE_Z3
     klee_message("Using Z3 solver backend");
-    return std::make_unique<Z3Solver>();
+#ifdef ENABLE_FP
+    klee_message("Using Z3 bitvector builder");
+    return std::make_unique<Z3Solver>(KLEE_BITVECTOR);
+#else
+    klee_message("Using Z3 core builder");
+    return std::make_unique<Z3Solver>(KLEE_CORE);
+#endif
 #else
     klee_message("Not compiled with Z3 support");
     return NULL;

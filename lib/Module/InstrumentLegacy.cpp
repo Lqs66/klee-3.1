@@ -32,7 +32,7 @@ DISABLE_WARNING_POP
 using namespace llvm;
 using namespace klee;
 
-void klee::instrument(bool CheckDivZero, bool CheckOvershift,
+void klee::instrument(bool CheckDivZero, bool CheckOvershift, bool WithFPRuntime,
                       llvm::Module *module) {
   // Inject checks prior to optimization... we also perform the
   // invariant transformations that we will end up doing later so that
@@ -57,7 +57,7 @@ void klee::instrument(bool CheckDivZero, bool CheckOvershift,
     pm.add(new OvershiftCheckPass());
 
   llvm::DataLayout targetData(module);
-  pm.add(new IntrinsicCleanerPass(targetData));
+  pm.add(new IntrinsicCleanerPass(targetData, WithFPRuntime));
   pm.run(*module);
 }
 
@@ -79,7 +79,7 @@ void klee::checkModule(bool DontVerify, llvm::Module *module) {
   }
 }
 
-void klee::optimiseAndPrepare(bool OptimiseKLEECall, bool Optimize,
+void klee::optimiseAndPrepare(bool OptimiseKLEECall, bool Optimize, bool WithFPRuntime,
                               SwitchImplType SwitchType, std::string EntryPoint,
                               llvm::ArrayRef<const char *> preservedFunctions,
                               llvm::Module *module) {
@@ -117,7 +117,7 @@ void klee::optimiseAndPrepare(bool OptimiseKLEECall, bool Optimize,
   }
 
   llvm::DataLayout targetData(module);
-  pm3.add(new IntrinsicCleanerPass(targetData));
+  pm3.add(new IntrinsicCleanerPass(targetData, WithFPRuntime));
   pm3.add(createScalarizerPass());
   pm3.add(new PhiCleanerPass());
   pm3.add(new FunctionAliasPass());

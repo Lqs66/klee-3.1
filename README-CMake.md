@@ -94,3 +94,6 @@ cmake -DCMAKE_BUILD_TYPE=Release /path/to/klee/src
   against STP in a build directory or an installed copy.
 
 * `WARNINGS_AS_ERRORS` (BOOLEAN) - Treat warnings as errors when building KLEE.
+
+* `ENABLE_FLOATING_POINT` (BOOLEAN) - Enable support for floating point operations in KLEE. 
+   Must set with `ENABLE_SOLVER_Z3=ON`.

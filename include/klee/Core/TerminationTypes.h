@@ -70,8 +70,9 @@ enum class StateTerminationClass : std::uint8_t {
   TTYPE(Merge, 71U, "")                                                        \
   TTMARK(EARLYALGORITHM, 71U)                                                  \
   TTYPE(SilentExit, 80U, "")                                                   \
-  TTMARK(EARLYUSER, 80U)                                                       \
-  TTMARK(END, 80U)
+  TTYPE(Unhandled, 81U, "unhandled.err")                                       \
+  TTMARK(EARLYUSER, 81U)                                                       \
+  TTMARK(END, 81U)
 
 
 ///@brief Reason an ExecutionState got terminated.

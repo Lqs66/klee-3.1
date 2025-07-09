@@ -42,7 +42,7 @@ foreach (bc_architecture ${bc_architectures})
         elseif (bc_optimization STREQUAL "Release+Debug+Asserts")
             list(APPEND local_flags -O2 -g -D_DEBUG)
         elseif (bc_optimization STREQUAL "Debug")
-            list(APPEND local_flags -g -D_DEBUG -DNDEBUG)
+            list(APPEND local_flags -g -D_DEBUG -DNDEBUG -fpermissive)
         elseif (bc_optimization STREQUAL "Debug+Asserts")
             list(APPEND local_flags -g -D_DEBUG)
         else()
@@ -111,6 +111,11 @@ endif ()
 
 list(APPEND RUNTIME_LIBRARIES UBSan)
 add_subdirectory(Sanitizer)
+
+if (ENABLE_FP_RUNTIME)
+    list(APPEND RUNTIME_LIBRARIES RuntimeFp)
+    add_subdirectory(klee-fp)
+endif ()
 
 add_custom_target(BuildKLEERuntimes
         DEPENDS "${RUNTIME_LIBRARIES}"

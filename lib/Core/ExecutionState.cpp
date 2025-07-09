@@ -75,7 +75,7 @@ StackFrame::~StackFrame() {
 /***/
 
 ExecutionState::ExecutionState(KFunction *kf, MemoryManager *mm)
-    : pc(kf->instructions), prevPC(pc) {
+    : pc(kf->instructions), prevPC(pc), roundingMode(llvm::APFloat::rmNearestTiesToEven) {
   pushFrame(nullptr, kf);
   setID();
   if (mm->stackFactory && mm->heapFactory) {
@@ -111,6 +111,7 @@ ExecutionState::ExecutionState(const ExecutionState& state):
     openMergeStack(state.openMergeStack),
     steppedInstructions(state.steppedInstructions),
     instsSinceCovNew(state.instsSinceCovNew),
+    roundingMode(state.roundingMode),
     unwindingInformation(state.unwindingInformation
                              ? state.unwindingInformation->clone()
                              : nullptr),

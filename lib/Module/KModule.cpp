@@ -62,6 +62,12 @@ namespace {
                               cl::desc("Print functions whose address is taken (default=false)"),
 			      cl::cat(ModuleCat));
 
+  //For testing rounding mode only
+  cl::opt<bool> UseKleeFloatInternals(
+            "float-internals",
+            cl::desc("Use KLEE internal functions for floating-point"),
+            cl::init(true));
+
   // Don't run VerifierPass when checking module
   cl::opt<bool>
   DontVerify("disable-verify",
@@ -192,8 +198,21 @@ bool KModule::link(std::vector<std::unique_ptr<llvm::Module>> &modules,
   return modules.size() != numRemainingModules;
 }
 
+void KModule::replaceFunction(const std::unique_ptr<llvm::Module> &m, const char *original,
+                                     const char *replacement) {
+  llvm::Function* originalFunc = m->getFunction(original);
+  llvm::Function* replacementFunc = m->getFunction(replacement);
+  if (!originalFunc)
+      return;
+  klee_message("Replacing function \"%s\" with \"%s\"", original, replacement);
+  assert(replacementFunc && "Replacement function not found");
+  assert(!(replacementFunc->isDeclaration()) && "replacement must have body");
+  originalFunc->replaceAllUsesWith(replacementFunc);
+  originalFunc->eraseFromParent();
+}
+
 void KModule::instrument(const Interpreter::ModuleOptions &opts) {
-  klee::instrument(opts.CheckDivZero, opts.CheckOvershift, module.get());
+  klee::instrument(opts.CheckDivZero, opts.CheckOvershift, opts.WithFPRuntime, module.get());
 }
 
 void KModule::optimiseAndPrepare(
@@ -205,8 +224,19 @@ void KModule::optimiseAndPrepare(
     addInternalFunction("klee_div_zero_check");
   if (opts.CheckOvershift)
     addInternalFunction("klee_overshift_check");
-
-  klee::optimiseAndPrepare(OptimiseKLEECall, opts.Optimize, SwitchType,
+  // Use KLEE's internal float classification functions if requested.
+  if (opts.WithFPRuntime) {
+    if (UseKleeFloatInternals) {
+      for (const auto& p : klee::floatReplacements) {
+        replaceFunction(module, p.first.c_str(), p.second.c_str());
+      }
+    }
+    for (const auto& p : klee::feRoundReplacements) {
+      replaceFunction(module, p.first.c_str(), p.second.c_str());
+    }
+  }
+  
+  klee::optimiseAndPrepare(OptimiseKLEECall, opts.Optimize, opts.WithFPRuntime, SwitchType,
                            opts.EntryPoint, preservedFunctions, module.get());
 }
 
