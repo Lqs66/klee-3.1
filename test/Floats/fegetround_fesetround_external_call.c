@@ -1,6 +1,6 @@
 // RUN: %clang %s -emit-llvm -O0 -g -c -o %t1.bc
 // RUN: rm -rf %t.klee-out
-// RUN: %klee --libc=klee --fp-runtime --output-dir=%t.klee-out -float-internals=0 --exit-on-error %t1.bc 0.5 > %t-output.txt 2>&1
+// RUN: %klee --libc=klee --solver-backend=z3 --fp-runtime --output-dir=%t.klee-out -float-internals=0 --exit-on-error %t1.bc 0.5 > %t-output.txt 2>&1
 // REQUIRES: fp-runtime
 #include "klee/klee.h"
 #include <assert.h>

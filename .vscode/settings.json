@@ -49,6 +49,7 @@
         "stdexcept": "cpp",
         "cwctype": "cpp",
         "typeinfo": "cpp",
-        "stdarg.h": "c"
+        "stdarg.h": "c",
+        "klee.h": "c"
     }
 }

@@ -63,6 +63,7 @@ ref<Expr> ExprVisitor::visitActual(const ref<Expr> &e) {
     case Expr::Concat: res = visitConcat(static_cast<ConcatExpr&>(ep)); break;
     case Expr::Extract: res = visitExtract(static_cast<ExtractExpr&>(ep)); break;
     case Expr::ZExt: res = visitZExt(static_cast<ZExtExpr&>(ep)); break;
+    case Expr::SExt: res = visitSExt(static_cast<SExtExpr&>(ep)); break;
     case Expr::FPExt:
       res = visitFPExt(static_cast<FPExtExpr &>(ep));
       break;

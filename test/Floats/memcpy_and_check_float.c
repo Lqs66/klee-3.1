@@ -1,6 +1,6 @@
 // RUN: %clang %s -emit-llvm -O0 -g -c -o %t1.bc
 // RUN: rm -rf %t.klee-out
-// RUN: %klee --libc=klee --output-dir=%t.klee-out --exit-on-error %t1.bc
+// RUN: %klee --libc=klee --solver-backend=z3 --output-dir=%t.klee-out --exit-on-error %t1.bc
 #include "klee/klee.h"
 #include <assert.h>
 #include <string.h>

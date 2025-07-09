@@ -2,7 +2,7 @@
 // RUN: %t1_native
 // RUN: %clang %s -emit-llvm -O0 -g -c -o %t1.bc
 // RUN: rm -rf %t.klee-out
-// RUN: %klee --libc=klee --output-dir=%t.klee-out --exit-on-error %t1.bc
+// RUN: %klee --libc=klee --solver-backend=z3 --output-dir=%t.klee-out --exit-on-error %t1.bc
 // REQUIRES: x86_64
 #include <assert.h>
 #include <inttypes.h>
