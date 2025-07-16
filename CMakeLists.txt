@@ -204,14 +204,17 @@ include(${CMAKE_SOURCE_DIR}/cmake/find_stp.cmake)
 include(${CMAKE_SOURCE_DIR}/cmake/find_z3.cmake)
 # metaSMT
 include(${CMAKE_SOURCE_DIR}/cmake/find_metasmt.cmake)
+# CVC5
+include(${CMAKE_SOURCE_DIR}/cmake/find_cvc5.cmake)
 
-if ((NOT ${ENABLE_Z3}) AND (NOT ${ENABLE_STP}) AND (NOT ${ENABLE_METASMT}))
+if ((NOT ${ENABLE_Z3}) AND (NOT ${ENABLE_STP}) AND (NOT ${ENABLE_METASMT}) AND (NOT ${ENABLE_CVC5}))
   message(FATAL_ERROR "No solver was specified. At least one solver is required."
     "You should enable a solver by passing one of more the following options"
     " to cmake:\n"
     "\"-DENABLE_SOLVER_STP=ON\"\n"
     "\"-DENABLE_SOLVER_Z3=ON\"\n"
-    "\"-DENABLE_SOLVER_METASMT=ON\"")
+    "\"-DENABLE_SOLVER_METASMT=ON\"\n"
+    "\"-DENABLE_SOLVER_CVC5=ON\"")
 endif()
 
 ###############################################################################
@@ -482,10 +485,11 @@ endif()
 ################################################################################
 option(ENABLE_FLOATING_POINT "Enable KLEE's floating point extension" OFF)
 if (ENABLE_FLOATING_POINT)
-  if (NOT ${ENABLE_Z3})
-    message (FATAL_ERROR "Floating point extension is availible only when using Z3 backend."
-            "You should enable Z3 by passing the following option to cmake:\n"
-            "\"-DENABLE_SOLVER_Z3=ON\"\n")
+  if (NOT ${ENABLE_Z3} AND NOT ${ENABLE_CVC5})
+    message (FATAL_ERROR "Floating point extension is availible only when using Z3/CVC5 backend."
+            "You should enable Z3/CVC5 by passing the following option to cmake:\n"
+            "\"-DENABLE_SOLVER_Z3=ON\"\n"
+            "\"-DENABLE_SOLVER_CVC5=ON\"\n")
   else()
     set(ENABLE_FP 1) # For config.h
     message(STATUS "Floating point extension enabled")

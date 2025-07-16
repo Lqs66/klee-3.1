@@ -2,6 +2,7 @@
 // RUN: rm -rf %t.klee-out
 // RUN: %klee --libc=klee --solver-backend=z3 --fp-runtime --output-dir=%t.klee-out --exit-on-error %t1.bc > %t-output.txt 2>&1
 // RUN: FileCheck -input-file=%t-output.txt %s
+// REQUIRES: x86_64
 // REQUIRES: fp-runtime
 #include "klee/klee.h"
 #include <math.h>

@@ -12,9 +12,9 @@
  * data that are common to both KLEE and Kleaver.
  */
 
+#include "klee/Config/Version.h"
 #include "klee/Solver/SolverCmdLine.h"
 
-#include "klee/Config/Version.h"
 #include "klee/Support/OptionCategories.h"
 
 #include "llvm/ADT/ArrayRef.h"
@@ -174,18 +174,26 @@ MetaSMTBackend("metasmt-backend",
 #define STP_IS_DEFAULT_STR " (default)"
 #define METASMT_IS_DEFAULT_STR ""
 #define Z3_IS_DEFAULT_STR ""
+#define CVC5_IS_DEFAULT_STR ""
 #define DEFAULT_CORE_SOLVER STP_SOLVER
 #elif ENABLE_Z3
 #define STP_IS_DEFAULT_STR ""
 #define METASMT_IS_DEFAULT_STR ""
 #define Z3_IS_DEFAULT_STR " (default)"
+#define CVC5_IS_DEFAULT_STR ""
 #define DEFAULT_CORE_SOLVER Z3_SOLVER
+#elif ENABLE_CVC5
+#define STP_IS_DEFAULT_STR ""
+#define METASMT_IS_DEFAULT_STR ""
+#define Z3_IS_DEFAULT_STR ""
+#define CVC5_IS_DEFAULT_STR " (default)"
+#define DEFAULT_CORE_SOLVER CVC5_SOLVER
 #elif ENABLE_METASMT
 #define STP_IS_DEFAULT_STR ""
 #define METASMT_IS_DEFAULT_STR " (default)"
 #define Z3_IS_DEFAULT_STR ""
+#define CVC5_IS_DEFAULT_STR ""
 #define DEFAULT_CORE_SOLVER METASMT_SOLVER
-#define Z3_IS_DEFAULT_STR ""
 #else
 #error "Unsupported solver configuration"
 #endif
@@ -196,7 +204,8 @@ cl::opt<CoreSolverType> CoreSolverToUse(
                clEnumValN(METASMT_SOLVER, "metasmt",
                           "metaSMT" METASMT_IS_DEFAULT_STR),
                clEnumValN(DUMMY_SOLVER, "dummy", "Dummy solver"),
-               clEnumValN(Z3_SOLVER, "z3", "Z3" Z3_IS_DEFAULT_STR)),
+               clEnumValN(Z3_SOLVER, "z3", "Z3" Z3_IS_DEFAULT_STR),
+               clEnumValN(CVC5_SOLVER, "cvc5", "CVC5" CVC5_IS_DEFAULT_STR)),
     cl::init(DEFAULT_CORE_SOLVER), cl::cat(SolvingCat));
 
 cl::opt<CoreSolverType> DebugCrossCheckCoreSolverWith(
@@ -207,6 +216,7 @@ cl::opt<CoreSolverType> DebugCrossCheckCoreSolverWith(
                clEnumValN(METASMT_SOLVER, "metasmt", "metaSMT"),
                clEnumValN(DUMMY_SOLVER, "dummy", "Dummy solver"),
                clEnumValN(Z3_SOLVER, "z3", "Z3"),
+               clEnumValN(CVC5_SOLVER, "cvc5", "CVC5"),
                clEnumValN(NO_SOLVER, "none", "Do not crosscheck (default)")),
     cl::init(NO_SOLVER), cl::cat(SolvingCat));
 } // namespace klee
@@ -214,4 +224,5 @@ cl::opt<CoreSolverType> DebugCrossCheckCoreSolverWith(
 #undef STP_IS_DEFAULT_STR
 #undef METASMT_IS_DEFAULT_STR
 #undef Z3_IS_DEFAULT_STR
+#undef CVC5_IS_DEFAULT_STR
 #undef DEFAULT_CORE_SOLVER

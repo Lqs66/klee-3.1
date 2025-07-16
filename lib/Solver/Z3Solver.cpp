@@ -138,6 +138,9 @@ Z3SolverImpl::Z3SolverImpl(Z3BuilderType type)
   // https://github.com/Z3Prover/z3/issues/507
   Z3_global_param_set("rewriter.hi_fp_unspecified", "true");
 
+  // Enable parallel solving for z3 >= 4.8.1 
+  Z3_global_param_set("parallel.enable", "true");
+
   if (!Z3QueryDumpFile.empty()) {
     std::string error;
     dumpedQueriesFile = klee_open_output_file(Z3QueryDumpFile, error);

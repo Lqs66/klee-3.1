@@ -33,6 +33,8 @@ add_library(kleaverSolver
   Z3CoreBuilder.cpp
   Z3HashConfig.cpp
   Z3Solver.cpp
+  CVC5Builder.cpp
+  CVC5Solver.cpp
 )
 
 llvm_config(kleaverSolver "${USE_LLVM_SHARED}" support)

@@ -7,6 +7,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "CVC5Solver.h"
 #include "STPSolver.h"
 #include "Z3Solver.h"
 #include "MetaSMTSolver.h"
@@ -55,6 +56,19 @@ std::unique_ptr<Solver> createCoreSolver(CoreSolverType cst) {
 #endif
 #else
     klee_message("Not compiled with Z3 support");
+    return NULL;
+#endif
+  case CVC5_SOLVER:
+#ifdef ENABLE_CVC5
+    klee_message("Using CVC5 solver backend");
+#ifdef ENABLE_FP
+    return std::make_unique<CVC5Solver>();
+#else
+    klee_message("CVC5 must be used with floating-point support enabled");
+    return NULL;
+#endif
+#else
+    klee_message("Not compiled with CVC5 support");
     return NULL;
 #endif
   case NO_SOLVER:

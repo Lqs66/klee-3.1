@@ -271,6 +271,9 @@ namespace klee {
   /// fails.
   std::unique_ptr<Solver> createDummySolver();
 
+  /// createCVC5Solver - Create a CVC5 solver
+  std::unique_ptr<Solver> createCVC5Solver();
+
   // Create a solver based on the supplied ``CoreSolverType``.
   std::unique_ptr<Solver> createCoreSolver(CoreSolverType cst);
   } // namespace klee
