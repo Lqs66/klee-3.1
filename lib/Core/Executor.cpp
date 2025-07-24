@@ -149,6 +149,12 @@ cl::opt<bool> EnableSplit(
     llvm::cl::init(false),
     cl::cat(SplitCat));
 
+cl::opt<std::string> splitEntryPoint(
+    "split-entry-point",
+    llvm::cl::desc("Specify the entry point function for max call depth restriction in split mode"),
+    llvm::cl::init(""),
+    cl::cat(SplitCat));
+
 cl::opt<unsigned> MaxCallDepth(
     "max-call-depth",
     llvm::cl::desc("Maximum function call depth for exploration"),
@@ -2374,19 +2380,17 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
           assert(success && "FIXME: Unhandled solver failure");
           (void) success;
           
-          klee_warning("BR instruction exceeded max forks/br (%u), State ID: %u, Current forks: %u, concretizing condition to %s",
+          klee_warning("BR instruction exceeded max forks/br (%u), State ID: %u, Current forks: %u",
              MaxForkssPerBr.getValue(),
              state.getID(),
-             curr_forks,
-             value->isTrue() ? "true" : "false");
+             curr_forks
+            //  value->isTrue() ? "true" : "false"
+            );
           
-          addConstraint(state, EqExpr::create(cond, value));
-          if (value->isTrue()) {
-            transferToBasicBlock(bi->getSuccessor(0), bi->getParent(), state);
-          } else {
-            transferToBasicBlock(bi->getSuccessor(1), bi->getParent(), state);
-          }
-          break;
+          // terminateStateOnUserError(state, "Exceeded max forks per branch", false);
+          terminateStateEarly(state, "Exceeded max forks per branch", StateTerminationType::EARLY);
+          return;
+
         }
       }
 
@@ -2636,6 +2640,51 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
     for (unsigned j=0; j<numArgs; ++j)
       arguments.push_back(eval(ki, j+1, state).value);
 
+    // 遇到超过调用深度的call指令，具体化实参并传入call指令但不会向当前执行状态新增约束（保持约束不变）
+
+    // This code implements the call-depth pruning strategy.
+    // It relies on the --max-call-depth command-line option.
+    // bool maxDepthReached = false;
+    if (EnableSplit && MaxCallDepth > 0) {
+      unsigned curr_call_depth = 0;
+      bool start_counting = splitEntryPoint.empty();
+      for (auto it = state.stack.begin(), ie = state.stack.end(); it != ie; ++it) {
+        if (it->kf->function->getName().startswith("klee_") || it->kf->function->getName().startswith("klee."))
+          continue;
+        if (!start_counting && (it->kf->function->getName() == splitEntryPoint)) {
+          start_counting = true;  // counting from the split entry point
+        }
+        if (start_counting) {
+          curr_call_depth++;
+        }
+        // llvm::outs() << it->kf->function->getName() << " curr_call_depth: " << curr_call_depth << "\n";
+      }
+      // llvm::outs() << "------------------\n";
+      if (curr_call_depth > MaxCallDepth) {
+        // maxDepthReached = true;
+        klee_warning("max-call-depth reached, continuing with concretized arguments. Current call depth: %u, maximum allowed: %u", curr_call_depth, MaxCallDepth.getValue());
+
+        // concretize arguments
+        for (unsigned i = 0; i < arguments.size(); i++) {
+          ref<Expr> arg = arguments[i];
+          if (!isa<ConstantExpr>(arg)) {
+            // Use toConstant but set concretize parameter to false, so no constraints are added
+            ref<ConstantExpr> concreteArg = 
+                toConstant(state, arg, "max-call-depth parameter concretization");
+            
+            // Print concretized parameter values for debugging
+            std::string valueStr;
+            concreteArg->toString(valueStr);
+            klee_warning("Concretized argument %d to value %s", 
+                        i, valueStr.c_str());
+            
+            // Update argument to concrete value
+            arguments[i] = concreteArg;
+          }
+        }
+      }
+    }
+
     if (auto* asmValue = dyn_cast<InlineAsm>(fp)) { //TODO: move to `executeCall`
       if (ExternalCalls != ExternalCallPolicy::None) {
         KInlineAsm callable(asmValue);
@@ -2730,23 +2779,6 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
       } while (free);
     }
 
-    if (EnableSplit && MaxCallDepth > 0) {
-
-      uint64_t curr_call_depth = -1; // We need to filter out the initial
-                                     // call frame, so we start at -1.
-      for (const auto &frame : state.stack) {
-        if (!frame.kf->getName().startswith("klee_")) {
-          curr_call_depth++;
-          // klee_message("Call frame: %s", frame.kf->function->getName().data());
-        }
-      }
-      if (curr_call_depth > MaxCallDepth) {
-        klee_warning("Path ID: %u, current call depth: %lu, maximum allowed: %u", state.id, curr_call_depth, MaxCallDepth.getValue());
-        terminateStateEarly(state, "Maximum call depth exceeded in split mode", 
-                            StateTerminationType::MaxDepth);
-        return;
-      }
-    }
     break;
   }
   case Instruction::PHI: {
@@ -4132,10 +4164,11 @@ static std::string terminationTypeFileExtension(StateTerminationType type) {
 
 void Executor::terminateStateOnExit(ExecutionState &state) {
   ++stats::terminationExit;
-  if (shouldWriteTest(state) || (AlwaysOutputSeeds && seedMap.count(&state)))
+  if (shouldWriteTest(state) || (AlwaysOutputSeeds && seedMap.count(&state))){
     interpreterHandler->processTestCase(
         state, nullptr,
         terminationTypeFileExtension(StateTerminationType::Exit).c_str());
+  }
 
   interpreterHandler->incPathsCompleted();
   terminateState(state, StateTerminationType::Exit);
@@ -4234,10 +4267,11 @@ void Executor::terminateStateOnError(ExecutionState &state,
   if (EmitAllErrors ||
       emittedErrors.insert(std::make_pair(lastInst, message)).second) {
     if (!ii.file.empty()) {
-      klee_message("ERROR: %s:%d: %s", ii.file.c_str(), ii.line, message.c_str());
+      klee_message("ERROR: %s:%d:%d: %s", ii.file.c_str(), ii.line, ii.column, message.c_str());
     } else {
       klee_message("ERROR: (location information missing) %s", message.c_str());
     }
+    llvm::outs() << *lastInst << "\n";
     if (!EmitAllErrors)
       klee_message("NOTE: now ignoring this error at this location");
 

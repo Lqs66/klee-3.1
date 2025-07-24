@@ -74,12 +74,12 @@ static inline void addPass(legacy::PassManager &PM, Pass *P) {
 
   // If we are verifying all of the intermediate steps, add the verifier...
   if (VerifyEach)
-    PM.add(createVerifierPass());
+    PM.add(createVerifierPass(false));
 }
 } // namespace
 
 static void AddStandardCompilePasses(legacy::PassManager &PM) {
-  PM.add(createVerifierPass()); // Verify that input is correct
+  PM.add(createVerifierPass(false)); // Verify that input is correct
 
   // If the -strip-debug command line option was specified, do it.
   if (StripDebug)

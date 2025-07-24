@@ -67,7 +67,7 @@ void klee::checkModule(bool DontVerify, llvm::Module *module) {
 
   legacy::PassManager pm;
   if (!DontVerify)
-    pm.add(createVerifierPass());
+    pm.add(createVerifierPass(false));
   pm.add(operandTypeCheckPass);
   pm.run(*module);
 
