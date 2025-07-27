@@ -2283,6 +2283,9 @@ Function *Executor::getTargetFunction(Value *calledVal) {
 
 void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
   Instruction *i = ki->inst;
+  if (EnableSplit && MaxCallDepth > 0 && state.stack.back().depth >= 0 && state.stack.back().depth < MaxCallDepth)
+    state.visitedBBs.insert(i->getParent());
+  //   bbCoverage.insert(i->getParent());
   switch (i->getOpcode()) {
     // Control flow
   case Instruction::Ret: {
@@ -3941,15 +3944,62 @@ bool Executor::checkMemoryUsage() {
 }
 
 void Executor::doDumpStates() {
-  if (!DumpStatesOnHalt || states.empty()) {
-    interpreterHandler->incPathsExplored(states.size());
-    return;
-  }
+    if (!DumpStatesOnHalt || states.empty()) {
+      interpreterHandler->incPathsExplored(states.size());
+      return;
+    }
 
-  klee_message("halting execution, dumping remaining states");
-  for (const auto &state : states)
-    terminateStateEarly(*state, "Execution halting.", StateTerminationType::Interrupted);
-  updateStates(nullptr);
+    klee_message("halting execution, dumping remaining states");
+
+    // Collect all states into a vector for easier manipulation
+    std::vector<ExecutionState *> allStates(states.begin(), states.end());
+    // Greedy selection for 100 states with maximum union of visitedBBs
+    std::set<llvm::BasicBlock *> covered;
+    std::vector<ExecutionState *> selected;
+    size_t maxSelect = 100;
+
+    while (selected.size() < maxSelect && !allStates.empty()) {
+        ExecutionState *best = nullptr;
+        size_t maxNew = 0;
+
+        for (auto it = allStates.begin(); it != allStates.end(); ++it) {
+            ExecutionState *s = *it;
+            size_t newCount = 0;
+            for (auto *bb : s->visitedBBs) {
+                if (covered.find(bb) == covered.end()) {
+                    ++newCount;
+                }
+            }
+            if (newCount > maxNew) {
+                maxNew = newCount;
+                best = s;
+            }
+        }
+
+        if (best) {
+            selected.push_back(best);
+            for (auto *bb : best->visitedBBs) {
+                covered.insert(bb);
+            }
+            // Remove best from allStates
+            allStates.erase(std::remove(allStates.begin(), allStates.end(), best), allStates.end());
+        } else {
+            break;
+        }
+    }
+
+    // Terminate selected states with dumping
+    for (auto *state : selected) {
+      bbCoverage.merge(state->visitedBBs);
+      terminateStateEarly(*state, "Execution halting.", StateTerminationType::Interrupted);
+    }
+
+    // Terminate remaining states without dumping
+    for (auto *state : allStates) {
+        terminateState(*state, StateTerminationType::Interrupted);
+    }
+
+    updateStates(nullptr);
 }
 
 void Executor::run(ExecutionState &initialState) {

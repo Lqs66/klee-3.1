@@ -21,6 +21,7 @@ struct KTest;
 namespace llvm {
 class Function;
 class LLVMContext;
+class BasicBlock;
 class Module;
 class raw_ostream;
 class raw_fd_ostream;
@@ -98,6 +99,8 @@ protected:
   {}
 
 public:
+  std::set<llvm::BasicBlock*> bbCoverage;
+
   virtual ~Interpreter() {}
 
   static Interpreter *create(llvm::LLVMContext &ctx,

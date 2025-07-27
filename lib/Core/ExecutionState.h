@@ -14,6 +14,8 @@
 #include "MemoryManager.h"
 #include "MergeHandler.h"
 
+#include "llvm/IR/BasicBlock.h"
+
 #include "klee/ADT/ImmutableSet.h"
 #include "klee/ADT/TreeStream.h"
 #include "klee/Expr/Constraints.h"
@@ -161,6 +163,8 @@ public:
   using stack_ty = std::vector<StackFrame>;
 
   // Execution - Control Flow specific
+  
+  std::set<llvm::BasicBlock*> visitedBBs;
 
   /// @brief Pointer to instruction to be executed after the current
   /// instruction

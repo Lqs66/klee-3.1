@@ -1595,6 +1595,8 @@ int main(int argc, char **argv, char **envp) {
     delete[] pArgv[i];
   delete[] pArgv;
 
+  uint64_t coveredBBs =
+  interpreter->bbCoverage.size();
   delete interpreter;
 
   uint64_t queries =
@@ -1636,6 +1638,8 @@ int main(int argc, char **argv, char **envp) {
         << handler->getNumPathsExplored() - handler->getNumPathsCompleted()
         << '\n'
         << "KLEE: done: generated tests = " << handler->getNumTestCases()
+        << '\n'
+        << "KLEE: done: covered basic blocks = " << coveredBBs
         << '\n';
 
   bool useColors = llvm::errs().is_displayed();
