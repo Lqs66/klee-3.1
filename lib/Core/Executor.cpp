@@ -123,24 +123,7 @@ cl::OptionCategory TestGenCat("Test generation options",
 cl::OptionCategory SplitCat(
     "Split options",
     "These options used to control scope of code analysis.");                           
-                              
-cl::opt<std::string> MaxTime(
-    "max-time",
-    cl::desc("Halt execution after the specified duration.  "
-             "Set to 0s to disable (default=0s)"),
-    cl::init("0s"),
-    cl::cat(TerminationCat));
-
-/*** Misc options ***/
-cl::opt<bool> SingleObjectResolution(
-    "single-object-resolution",
-    cl::desc("Try to resolve memory reads/writes to single objects "
-             "when offsets are symbolic (default=false)"),
-    cl::init(false), cl::cat(MiscCat));
-} // namespace klee
-
-namespace {
-
+   
 /*** Split options ***/
 
 cl::opt<bool> EnableSplit(
@@ -166,6 +149,23 @@ cl::opt<unsigned> MaxCallDepth(
 //     llvm::cl::desc("Maximum number of forks per instruction in split mode"),
 //     llvm::cl::init(0), // 0 means no limit
 //     cl::cat(SplitCat));
+
+cl::opt<std::string> MaxTime(
+    "max-time",
+    cl::desc("Halt execution after the specified duration.  "
+             "Set to 0s to disable (default=0s)"),
+    cl::init("0s"),
+    cl::cat(TerminationCat));
+
+/*** Misc options ***/
+cl::opt<bool> SingleObjectResolution(
+    "single-object-resolution",
+    cl::desc("Try to resolve memory reads/writes to single objects "
+             "when offsets are symbolic (default=false)"),
+    cl::init(false), cl::cat(MiscCat));
+} // namespace klee
+
+namespace {
 
 /*** Test generation options ***/
 

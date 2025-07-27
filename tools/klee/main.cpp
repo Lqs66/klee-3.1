@@ -60,6 +60,7 @@ DISABLE_WARNING_POP
 #include <iomanip>
 #include <iterator>
 #include <sstream>
+#include <queue>
 
 using namespace llvm;
 using namespace klee;
@@ -297,6 +298,9 @@ namespace {
 namespace klee {
 extern cl::opt<std::string> MaxTime;
 class ExecutionState;
+extern cl::opt<bool> EnableSplit;
+extern cl::opt<std::string> splitEntryPoint;
+extern cl::opt<unsigned> MaxCallDepth;
 }
 
 /***/
@@ -1052,6 +1056,46 @@ static void replaceOrRenameFunction(llvm::Module *module,
   }
 }
 
+static unsigned countBasicBlocksFromEntry(llvm::Function *entry, unsigned maxDepth){
+  uint32_t totalBBs = 0;
+  llvm::Module *module = entry->getParent();
+  std::queue<std::pair<llvm::Function*, unsigned>> workList;
+  workList.push(std::make_pair(entry, 0));
+  while(!workList.empty()){
+    auto front = workList.front();
+    llvm::Function* fn = front.first;
+    unsigned depth = front.second;
+    workList.pop();
+    if(depth >= maxDepth) continue;
+    totalBBs += fn->size();
+    for (llvm::BasicBlock &bb : *fn) {
+      for (llvm::Instruction &i : bb) {
+        if(auto call = dyn_cast<CallBase>(&i)){
+          if (call->isIndirectCall()){
+            if (auto *targets = call->getMetadata("targets")){
+              for (unsigned idx = 0, e = targets->getNumOperands(); idx < e; ++idx){
+                if (auto *MDS = dyn_cast<MDString>(targets->getOperand(idx))){
+                  std::string targetName = MDS->getString().str();
+                  if (auto *targetFn = module->getFunction(targetName)){
+                    if (targetFn->isDeclaration()) continue;
+                    workList.push(std::make_pair(targetFn, depth + 1));
+                  }
+                }
+              }
+            }
+          }else{
+            if (auto callee = call->getCalledFunction()){
+              if (callee->isDeclaration()) continue;
+              workList.push(std::make_pair(callee, depth + 1));
+            }
+          }
+        }
+      }
+    }
+  }
+  return totalBBs;
+}
+
 static void
 createLibCWrapper(std::vector<std::unique_ptr<llvm::Module>> &modules,
                   llvm::StringRef intendedFunction,
@@ -1457,6 +1501,8 @@ int main(int argc, char **argv, char **envp) {
     klee_error("Entry function '%s' not found in module.", EntryPoint.c_str());
 
   externalsAndGlobalsCheck(finalModule);
+  llvm::Function* splitEntryFn = finalModule->getFunction(splitEntryPoint);
+  uint32_t totalBBs = countBasicBlocksFromEntry(splitEntryFn, MaxCallDepth);
 
   std::vector<bool> replayPath;
   if (!ReplayPathFile.empty()) {
@@ -1639,7 +1685,7 @@ int main(int argc, char **argv, char **envp) {
         << '\n'
         << "KLEE: done: generated tests = " << handler->getNumTestCases()
         << '\n'
-        << "KLEE: done: covered basic blocks = " << coveredBBs
+        << "KLEE: done: basic blocks coverage = " << coveredBBs << "/" << totalBBs << " = " << std::fixed << std::setprecision(2) << (coveredBBs * 100.00 / totalBBs) << '%'
         << '\n';
 
   bool useColors = llvm::errs().is_displayed();

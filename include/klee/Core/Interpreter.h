@@ -100,6 +100,7 @@ protected:
 
 public:
   std::set<llvm::BasicBlock*> bbCoverage;
+  uint32_t totalBBs;
 
   virtual ~Interpreter() {}
 
