@@ -45,6 +45,8 @@ struct StackFrame {
   KFunction *kf;
   CallPathNode *callPathNode;
 
+  long depth = -1; // represents the call depth of current frame, -1 means not set
+
   std::vector<const MemoryObject *> allocas;
   Cell *locals;
 

@@ -161,11 +161,11 @@ cl::opt<unsigned> MaxCallDepth(
     llvm::cl::init(0), // 0 means no limit
     cl::cat(SplitCat));
 
-cl::opt<unsigned> MaxForkssPerBr(
-    "max-br-forks",
-    llvm::cl::desc("Maximum number of forks per instruction in split mode"),
-    llvm::cl::init(0), // 0 means no limit
-    cl::cat(SplitCat));
+// cl::opt<unsigned> MaxForksPerBr(
+//     "max-br-forks",
+//     llvm::cl::desc("Maximum number of forks per instruction in split mode"),
+//     llvm::cl::init(0), // 0 means no limit
+//     cl::cat(SplitCat));
 
 /*** Test generation options ***/
 
@@ -546,16 +546,19 @@ Executor::Executor(LLVMContext &ctx, const InterpreterOptions &opts,
     klee_message("Split mode enabled");
     if (MaxCallDepth > 0) {
       klee_message("Maximum call depth set to: %u", MaxCallDepth.getValue());
+      if (!splitEntryPoint.empty()){
+        klee_message("Calculate call chain depth based on %s", splitEntryPoint.c_str());
+      }
     } else {
       klee_message("No call depth limit (MaxCallDepth = 0)");
     }
   }
 
-  if (!EnableSplit && MaxForkssPerBr.getNumOccurrences() > 0) {
-    klee_warning("MaxForkssPerBr is set to %u but EnableSplit is disabled. "
-                 "MaxForkssPerBr will have no effect unless --enable-split is used.",
-                 MaxForkssPerBr.getValue());
-  }
+  // if (!EnableSplit && MaxForksPerBr.getNumOccurrences() > 0) {
+  //   klee_warning("MaxForksPerBr is set to %u but EnableSplit is disabled. "
+  //                "MaxForksPerBr will have no effect unless --enable-split is used.",
+  //                MaxForksPerBr.getValue());
+  // }
 
   const time::Span maxTime{MaxTime};
   if (maxTime) timers.add(
@@ -1718,6 +1721,16 @@ void Executor::unwindToNextLandingpad(ExecutionState &state) {
         KFunction *kf = kmodule->functionMap[personality_fn];
 
         state.pushFrame(state.prevPC, kf);
+        if (EnableSplit && MaxCallDepth > 0){
+          if (kf->function->getName() == splitEntryPoint){
+            state.stack.back().depth = 0;
+          }
+          if(!state.stack.empty() && state.stack.size() > 1){
+            StackFrame &caller = state.stack[state.stack.size() - 2];
+            if (caller.depth >= 0)
+              state.stack.back().depth = caller.depth + 1;
+          }
+        }
         state.pc = kf->instructions;
         bindArgument(kf, 0, state, sui->exceptionObject);
         bindArgument(kf, 1, state, clauses_mo->getSizeExpr());
@@ -2087,6 +2100,16 @@ void Executor::executeCall(ExecutionState &state, KInstruction *ki, Function *f,
     KFunction *kf = kmodule->functionMap[f];
 
     state.pushFrame(state.prevPC, kf);
+    if (EnableSplit && MaxCallDepth > 0){
+      if (f->getName() == splitEntryPoint){
+        state.stack.back().depth = 0;
+      }
+      if(!state.stack.empty() && state.stack.size() > 1){
+        StackFrame &caller = state.stack[state.stack.size() - 2];
+        if (caller.depth >= 0)
+          state.stack.back().depth = caller.depth + 1;
+      }
+    }
     state.pc = kf->instructions;
 
     if (statsTracker)
@@ -2365,47 +2388,26 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
       // FIXME: Find a way that we don't have this hidden dependency.
       assert(bi->getCondition() == bi->getOperand(0) &&
              "Wrong operand index!");
-
-      if (EnableSplit && MaxForkssPerBr > 0){
-        
-        auto it = state._brForks.find(bi);
-        unsigned curr_forks = (it != state._brForks.end()) ? it->second : 0;
-
-        if (curr_forks >= MaxForkssPerBr){
-          ref<Expr> cond = eval(ki, 0, state).value;
-          cond = optimizer.optimizeExpr(cond, false);
-
-          ref<ConstantExpr> value;
-          bool success = solver->getValue(state.constraints, cond, value, state.queryMetaData);
-          assert(success && "FIXME: Unhandled solver failure");
-          (void) success;
-          
-          klee_warning("BR instruction exceeded max forks/br (%u), State ID: %u, Current forks: %u",
-             MaxForkssPerBr.getValue(),
-             state.getID(),
-             curr_forks
-            //  value->isTrue() ? "true" : "false"
-            );
-          
-          // terminateStateOnUserError(state, "Exceeded max forks per branch", false);
-          terminateStateEarly(state, "Exceeded max forks per branch", StateTerminationType::EARLY);
-          return;
-
-        }
-      }
-
       ref<Expr> cond = eval(ki, 0, state).value;
 
       cond = optimizer.optimizeExpr(cond, false);
-      Executor::StatePair branches = fork(state, cond, false, BranchType::Conditional);
 
-      if (EnableSplit && MaxForkssPerBr > 0 && (branches.first || branches.second)) {
-        if (branches.first && branches.second) {
-          state._brForks[bi]++;
-          if (branches.first) branches.first->_brForks[bi] = state._brForks[bi];
-          if (branches.second) branches.second->_brForks[bi] = state._brForks[bi];
+      if (EnableSplit && MaxCallDepth > 0 && state.stack.back().depth >= MaxCallDepth) {
+        // concrete execution
+        ref<ConstantExpr> concreteValue;
+        bool success = solver->getValue(state.constraints, cond, concreteValue, state.queryMetaData);
+        if (success) {
+          bool value = concreteValue->isTrue();
+          BasicBlock *target = value ? bi->getSuccessor(0) : bi->getSuccessor(1);
+          transferToBasicBlock(target, bi->getParent(), state);
+          klee_warning("concrete branch condition as %d", (int)value);
+          break;
+        } else {
+          klee_warning("Failed to concretize condition at max call depth");
         }
       }
+
+      Executor::StatePair branches = fork(state, cond, false, BranchType::Conditional);
 
       // NOTE: There is a hidden dependency here, markBranchVisited
       // requires that we still be in the context of the branch
@@ -2640,29 +2642,16 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
     for (unsigned j=0; j<numArgs; ++j)
       arguments.push_back(eval(ki, j+1, state).value);
 
-    // 遇到超过调用深度的call指令，具体化实参并传入call指令但不会向当前执行状态新增约束（保持约束不变）
-
     // This code implements the call-depth pruning strategy.
     // It relies on the --max-call-depth command-line option.
     // bool maxDepthReached = false;
     if (EnableSplit && MaxCallDepth > 0) {
-      unsigned curr_call_depth = 0;
-      bool start_counting = splitEntryPoint.empty();
-      for (auto it = state.stack.begin(), ie = state.stack.end(); it != ie; ++it) {
-        if (it->kf->function->getName().startswith("klee_") || it->kf->function->getName().startswith("klee."))
-          continue;
-        if (!start_counting && (it->kf->function->getName() == splitEntryPoint)) {
-          start_counting = true;  // counting from the split entry point
-        }
-        if (start_counting) {
-          curr_call_depth++;
-        }
-        // llvm::outs() << it->kf->function->getName() << " curr_call_depth: " << curr_call_depth << "\n";
-      }
-      // llvm::outs() << "------------------\n";
-      if (curr_call_depth > MaxCallDepth) {
+      long curr_call_depth = state.stack.back().depth;
+      // llvm::outs() << state.stack.back()->kf->function->getName() << " curr_call_depth: " << curr_call_depth << "\n";
+
+      if (curr_call_depth >= MaxCallDepth) {
         // maxDepthReached = true;
-        klee_warning("max-call-depth reached, continuing with concretized arguments. Current call depth: %u, maximum allowed: %u", curr_call_depth, MaxCallDepth.getValue());
+        klee_warning("max-call-depth reached, continuing with concretized arguments. Current call depth: %lu, maximum allowed: %u", curr_call_depth, MaxCallDepth.getValue());
 
         // concretize arguments
         for (unsigned i = 0; i < arguments.size(); i++) {
@@ -4272,6 +4261,10 @@ void Executor::terminateStateOnError(ExecutionState &state,
       klee_message("ERROR: (location information missing) %s", message.c_str());
     }
     llvm::outs() << *lastInst << "\n";
+    llvm::outs() << "Call stack:\n";
+    for(auto it = state.stack.begin(); it != state.stack.end(); ++it){
+      llvm::outs() << "  " << it->kf->function->getName() << "\n";
+    }
     if (!EmitAllErrors)
       klee_message("NOTE: now ignoring this error at this location");
 
