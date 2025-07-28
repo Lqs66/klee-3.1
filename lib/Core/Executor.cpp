@@ -533,6 +533,9 @@ const std::unordered_set <Intrinsic::ID> Executor::modelledFPIntrinsics = {
   Intrinsic::sin
 };
 
+std::set<llvm::BasicBlock *> _visitedBBsTerminate;
+bool _add_visited_flags = true;
+
 Executor::Executor(LLVMContext &ctx, const InterpreterOptions &opts,
                    InterpreterHandler *ih)
     : Interpreter(opts), interpreterHandler(ih), searcher(0),
@@ -3955,6 +3958,7 @@ void Executor::doDumpStates() {
     std::vector<ExecutionState *> allStates(states.begin(), states.end());
     // Greedy selection for 100 states with maximum union of visitedBBs
     std::set<llvm::BasicBlock *> covered;
+    covered.merge(_visitedBBsTerminate);
     std::vector<ExecutionState *> selected;
     size_t maxSelect = 100;
 
@@ -3987,7 +3991,7 @@ void Executor::doDumpStates() {
             break;
         }
     }
-
+    _add_visited_flags = false;
     // Terminate selected states with dumping
     for (auto *state : selected) {
       bbCoverage.merge(state->visitedBBs);
@@ -4204,6 +4208,8 @@ static std::string terminationTypeFileExtension(StateTerminationType type) {
 void Executor::terminateStateOnExit(ExecutionState &state) {
   ++stats::terminationExit;
   if (shouldWriteTest(state) || (AlwaysOutputSeeds && seedMap.count(&state))){
+    if (_add_visited_flags)
+      _visitedBBsTerminate.merge(state.visitedBBs);
     interpreterHandler->processTestCase(
         state, nullptr,
         terminationTypeFileExtension(StateTerminationType::Exit).c_str());
@@ -4222,6 +4228,8 @@ void Executor::terminateStateEarly(ExecutionState &state, const Twine &message,
 
   if ((reason <= StateTerminationType::EARLY && shouldWriteTest(state)) ||
       (AlwaysOutputSeeds && seedMap.count(&state))) {
+    if (_add_visited_flags)
+      _visitedBBsTerminate.merge(state.visitedBBs);
     interpreterHandler->processTestCase(
         state, (message + "\n").str().c_str(),
         terminationTypeFileExtension(reason).c_str());
@@ -4337,6 +4345,8 @@ void Executor::terminateStateOnError(ExecutionState &state,
     const std::string ext = terminationTypeFileExtension(terminationType);
     // use user provided suffix from klee_report_error()
     const char * file_suffix = suffix ? suffix : ext.c_str();
+    if (_add_visited_flags)
+      _visitedBBsTerminate.merge(state.visitedBBs);
     interpreterHandler->processTestCase(state, msg.str().c_str(), file_suffix);
   }
 
