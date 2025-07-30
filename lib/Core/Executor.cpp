@@ -2398,20 +2398,20 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
 
       cond = optimizer.optimizeExpr(cond, false);
 
-      if (EnableSplit && MaxCallDepth > 0 && state.stack.back().depth >= MaxCallDepth) {
-        // concrete execution
-        ref<ConstantExpr> concreteValue;
-        bool success = solver->getValue(state.constraints, cond, concreteValue, state.queryMetaData);
-        if (success) {
-          bool value = concreteValue->isTrue();
-          BasicBlock *target = value ? bi->getSuccessor(0) : bi->getSuccessor(1);
-          transferToBasicBlock(target, bi->getParent(), state);
-          klee_warning("concrete branch condition as %d", (int)value);
-          break;
-        } else {
-          klee_warning("Failed to concretize condition at max call depth");
-        }
-      }
+      // if (EnableSplit && MaxCallDepth > 0 && state.stack.back().depth >= MaxCallDepth) {
+      //   // concrete execution
+      //   ref<ConstantExpr> concreteValue;
+      //   bool success = solver->getValue(state.constraints, cond, concreteValue, state.queryMetaData);
+      //   if (success) {
+      //     bool value = concreteValue->isTrue();
+      //     BasicBlock *target = value ? bi->getSuccessor(0) : bi->getSuccessor(1);
+      //     transferToBasicBlock(target, bi->getParent(), state);
+      //     klee_warning("concrete branch condition as %d", (int)value);
+      //     break;
+      //   } else {
+      //     klee_warning("Failed to concretize condition at max call depth");
+      //   }
+      // }
 
       Executor::StatePair branches = fork(state, cond, false, BranchType::Conditional);
 
@@ -2657,26 +2657,51 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
 
       if (curr_call_depth >= MaxCallDepth) {
         // maxDepthReached = true;
-        klee_warning("max-call-depth reached, continuing with concretized arguments. Current call depth: %lu, maximum allowed: %u", curr_call_depth, MaxCallDepth.getValue());
+        klee_warning("max-call-depth reached. Current call depth: %lu, maximum allowed: %u", curr_call_depth, MaxCallDepth.getValue());
 
-        // concretize arguments
-        for (unsigned i = 0; i < arguments.size(); i++) {
-          ref<Expr> arg = arguments[i];
-          if (!isa<ConstantExpr>(arg)) {
-            // Use toConstant but set concretize parameter to false, so no constraints are added
-            ref<ConstantExpr> concreteArg = 
-                toConstant(state, arg, "max-call-depth parameter concretization");
-            
-            // Print concretized parameter values for debugging
-            std::string valueStr;
-            concreteArg->toString(valueStr);
-            klee_warning("Concretized argument %d to value %s", 
-                        i, valueStr.c_str());
-            
-            // Update argument to concrete value
-            arguments[i] = concreteArg;
-          }
+        // 检查当前call指令是否有返回值，若有返回值创建一个符号变量并跳过执行
+        if (!cb.getType()->isVoidTy()){
+          // Create a symbolic variable for the return value
+          std::string uniqueName = "call_ret_" + std::to_string(reinterpret_cast<uintptr_t>(ki->inst)) + "_" + 
+                       std::to_string(state.stack.size());
+          llvm::outs() << cb << "\n";
+          // Get the return type width
+          Expr::Width width = getWidthForLLVMType(cb.getType());
+          uint64_t size = width / 8; // Convert bits to bytes
+
+          // Create a temporary memory object for the return value
+          MemoryObject *mo = memory->allocate(size, false, false, &state, ki->inst, 8);
+          mo->setName(uniqueName);
+          
+          // Use the standard executeMakeSymbolic approach
+          executeMakeSymbolic(state, mo, uniqueName);
+          
+          // Read the symbolic value from the memory object
+          const ObjectState *os = state.addressSpace.findObject(mo);
+          ref<Expr> symbolicValue = os->read(0, width);
+          
+          // Bind the symbolic value to the call instruction
+          bindLocal(ki, state, symbolicValue);
         }
+        break;
+        // concretize arguments
+        // for (unsigned i = 0; i < arguments.size(); i++) {
+        //   ref<Expr> arg = arguments[i];
+        //   if (!isa<ConstantExpr>(arg)) {
+        //     // Use toConstant but set concretize parameter to false, so no constraints are added
+        //     ref<ConstantExpr> concreteArg = 
+        //         toConstant(state, arg, "max-call-depth parameter concretization");
+            
+        //     // Print concretized parameter values for debugging
+        //     std::string valueStr;
+        //     concreteArg->toString(valueStr);
+        //     klee_warning("Concretized argument %d to value %s", 
+        //                 i, valueStr.c_str());
+            
+        //     // Update argument to concrete value
+        //     arguments[i] = concreteArg;
+        //   }
+        // }
       }
     }
 
