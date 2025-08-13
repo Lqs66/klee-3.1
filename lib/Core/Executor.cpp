@@ -1847,7 +1847,8 @@ void Executor::concreteCall(ExecutionState &state, KInstruction *ki, Function *f
   // Create shadowState
   ExecutionState *shadowState = state.branch();
   shadowState->isConcrete = true;
-  
+  klee_warning("Created shadow state (ID: %u) for concrete execution", shadowState->getID());
+
   struct ByteBackup {
     const MemoryObject *mo;
     unsigned offset;
@@ -1904,6 +1905,7 @@ void Executor::concreteCall(ExecutionState &state, KInstruction *ki, Function *f
 
   if (!shadowState->pc) {
     klee_warning("Shadow state halted during concrete execution. Terminating original state.");
+    delete shadowState;
     terminateState(state, StateTerminationType::Execution);
     return;
   }
@@ -4421,6 +4423,7 @@ void Executor::terminateStateOnError(ExecutionState &state,
     } else {
       klee_message("ERROR: (location information missing) %s", message.c_str());
     }
+    llvm::outs() << "state ID: " << state.getID() << "\n";
     llvm::outs() << *lastInst << "\n";
     llvm::outs() << "Call stack:\n";
     for(auto it = state.stack.begin(); it != state.stack.end(); ++it){
