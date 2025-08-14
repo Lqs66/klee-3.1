@@ -166,6 +166,8 @@ public:
   
   bool isConcrete = false;
 
+  bool concreteHalt = false;
+
   std::set<llvm::BasicBlock*> visitedBBs;
 
   /// @brief Pointer to instruction to be executed after the current

@@ -1891,7 +1891,7 @@ void Executor::concreteCall(ExecutionState &state, KInstruction *ki, Function *f
   StatsTracker *originalStatsTracker = statsTracker;
   statsTracker = nullptr;
 
-  while (shadowState->stack.size() >= initialStackSize) {
+  while (!shadowState->concreteHalt && shadowState->stack.size() >= initialStackSize) {
     KInstruction *current_ki = shadowState->pc;
     // for debug
     // llvm::outs() << "Executing instruction: " << *current_ki->inst << "\n";
@@ -1903,7 +1903,7 @@ void Executor::concreteCall(ExecutionState &state, KInstruction *ki, Function *f
   // Restore stats tracking
   statsTracker = originalStatsTracker;
 
-  if (!shadowState->pc) {
+  if (shadowState->concreteHalt) {
     klee_warning("Shadow state halted during concrete execution. Terminating original state.");
     delete shadowState;
     terminateState(state, StateTerminationType::Execution);
@@ -4271,6 +4271,12 @@ void Executor::terminateState(ExecutionState &state,
   if (replayKTest && replayPosition!=replayKTest->numObjects) {
     klee_warning_once(replayKTest,
                       "replay did not consume all objects in test input.");
+  }
+
+  if (state.isConcrete) {
+    klee_warning("Terminating concrete state (ID: %d)", state.getID());
+    state.concreteHalt = true;
+    return;
   }
 
   interpreterHandler->incPathsExplored();
