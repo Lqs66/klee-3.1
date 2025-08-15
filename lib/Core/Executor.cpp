@@ -144,11 +144,11 @@ cl::opt<unsigned> MaxCallDepth(
     llvm::cl::init(0), // 0 means no limit
     cl::cat(SplitCat));
 
-// cl::opt<unsigned> MaxForksPerBr(
-//     "max-br-forks",
-//     llvm::cl::desc("Maximum number of forks per instruction in split mode"),
-//     llvm::cl::init(0), // 0 means no limit
-//     cl::cat(SplitCat));
+cl::opt<bool> DelayGenTestCase(
+    "delay-gen-test-case",
+    llvm::cl::desc("Delay generation of test cases until all paths are explored"),
+    llvm::cl::init(false),
+    cl::cat(SplitCat));
 
 cl::opt<std::string> MaxTime(
     "max-time",
@@ -533,8 +533,6 @@ const std::unordered_set <Intrinsic::ID> Executor::modelledFPIntrinsics = {
   Intrinsic::sin
 };
 
-std::set<llvm::BasicBlock *> _visitedBBsTerminate;
-bool _add_visited_flags = true;
 
 Executor::Executor(LLVMContext &ctx, const InterpreterOptions &opts,
                    InterpreterHandler *ih)
@@ -546,6 +544,7 @@ Executor::Executor(LLVMContext &ctx, const InterpreterOptions &opts,
       ivcEnabled(false), debugLogBuffer(debugBufferString) {
 
   if (EnableSplit) {
+    delayedGenTestCase = DelayGenTestCase;
     klee_message("Split mode enabled");
     if (MaxCallDepth > 0) {
       klee_message("Maximum call depth set to: %u", MaxCallDepth.getValue());
@@ -555,6 +554,8 @@ Executor::Executor(LLVMContext &ctx, const InterpreterOptions &opts,
     } else {
       klee_message("No call depth limit (MaxCallDepth = 0)");
     }
+    if (delayedGenTestCase)
+      klee_message("Delay generation of test cases");
   }
 
   // if (!EnableSplit && MaxForksPerBr.getNumOccurrences() > 0) {
@@ -3878,7 +3879,11 @@ void Executor::updateStates(ExecutionState *current) {
     if (it3 != seedMap.end())
       seedMap.erase(it3);
     executionTree->remove(es->executionTreeNode);
-    delete es;
+    if (EnableSplit && delayedGenTestCase){
+      delayedStates.push_back(std::make_pair(es, true));
+    }else{
+      delete es;
+    }
   }
   removedStates.clear();
 }
@@ -4051,19 +4056,46 @@ bool Executor::checkMemoryUsage() {
   return false;
 }
 
+static bool shouldWriteTest(const ExecutionState &state) {
+  return !OnlyOutputStatesCoveringNew || state.coveredNew;
+}
+
+static std::string terminationTypeFileExtension(StateTerminationType type) {
+  std::string ret;
+  #undef TTYPE
+  #undef TTMARK
+  #define TTYPE(N,I,S) case StateTerminationType::N: ret = (S); break;
+  #define TTMARK(N,I)
+  switch (type) {
+    TERMINATION_TYPES
+  }
+  return ret;
+};
+
 void Executor::doDumpStates() {
-    if (!DumpStatesOnHalt || states.empty()) {
+    if ((!DumpStatesOnHalt || states.empty()) && !delayedGenTestCase) {
       interpreterHandler->incPathsExplored(states.size());
       return;
     }
 
-    klee_message("halting execution, dumping remaining states");
+    if (!delayedGenTestCase)
+      klee_message("halting execution, dumping remaining states");
 
     // Collect all states into a vector for easier manipulation
     std::vector<ExecutionState *> allStates(states.begin(), states.end());
+    // handle delayed states
+    std::set<ExecutionState *> delayedStatesSet;
+    for (auto &pair : delayedStates) {
+      ExecutionState *state = pair.first;
+      if (pair.second) {
+        allStates.push_back(state);
+        delayedStatesSet.insert(state);
+      }else{
+        delete state;
+      }
+    }
     // Greedy selection for 100 states with maximum union of visitedBBs
     std::set<llvm::BasicBlock *> covered;
-    covered.merge(_visitedBBsTerminate);
     std::vector<ExecutionState *> selected;
     size_t maxSelect = 100;
 
@@ -4096,16 +4128,34 @@ void Executor::doDumpStates() {
             break;
         }
     }
-    _add_visited_flags = false;
+    delayedStates.clear();
+    delayedGenTestCase = false;
     // Terminate selected states with dumping
     for (auto *state : selected) {
       bbCoverage.merge(state->visitedBBs);
-      terminateStateEarly(*state, "Execution halting.", StateTerminationType::Interrupted);
+      if (delayedStatesSet.find(state) != delayedStatesSet.end()) {
+          ++stats::terminationExit;
+          if (shouldWriteTest(*state) || (AlwaysOutputSeeds && seedMap.count(state))){
+            interpreterHandler->processTestCase(
+                *state, nullptr,
+                terminationTypeFileExtension(StateTerminationType::Exit).c_str());
+          }
+
+          interpreterHandler->incPathsCompleted();
+          delete state;
+      }
+      else
+        terminateStateEarly(*state, "Execution halting.", StateTerminationType::Interrupted);
     }
 
     // Terminate remaining states without dumping
     for (auto *state : allStates) {
-        terminateState(*state, StateTerminationType::Interrupted);
+        if (delayedStatesSet.find(state) != delayedStatesSet.end()) {
+          interpreterHandler->incPathsCompleted();
+          delete state;
+        }
+        else
+          terminateState(*state, StateTerminationType::Interrupted);
     }
 
     updateStates(nullptr);
@@ -4296,31 +4346,21 @@ void Executor::terminateState(ExecutionState &state,
       seedMap.erase(it3);
     addedStates.erase(it);
     executionTree->remove(state.executionTreeNode);
+    if (EnableSplit && delayedGenTestCase){
+      delayedStates.push_back(std::make_pair(&state, false));
+      return;
+    }
     delete &state;
   }
 }
 
-static bool shouldWriteTest(const ExecutionState &state) {
-  return !OnlyOutputStatesCoveringNew || state.coveredNew;
-}
-
-static std::string terminationTypeFileExtension(StateTerminationType type) {
-  std::string ret;
-  #undef TTYPE
-  #undef TTMARK
-  #define TTYPE(N,I,S) case StateTerminationType::N: ret = (S); break;
-  #define TTMARK(N,I)
-  switch (type) {
-    TERMINATION_TYPES
-  }
-  return ret;
-};
-
 void Executor::terminateStateOnExit(ExecutionState &state) {
+  if (EnableSplit && delayedGenTestCase) {
+    terminateState(state, StateTerminationType::Exit);
+    return;
+  }
   ++stats::terminationExit;
   if (shouldWriteTest(state) || (AlwaysOutputSeeds && seedMap.count(&state))){
-    if (_add_visited_flags)
-      _visitedBBsTerminate.merge(state.visitedBBs);
     interpreterHandler->processTestCase(
         state, nullptr,
         terminationTypeFileExtension(StateTerminationType::Exit).c_str());
@@ -4339,8 +4379,6 @@ void Executor::terminateStateEarly(ExecutionState &state, const Twine &message,
 
   if ((reason <= StateTerminationType::EARLY && shouldWriteTest(state)) ||
       (AlwaysOutputSeeds && seedMap.count(&state))) {
-    if (_add_visited_flags)
-      _visitedBBsTerminate.merge(state.visitedBBs);
     interpreterHandler->processTestCase(
         state, (message + "\n").str().c_str(),
         terminationTypeFileExtension(reason).c_str());
@@ -4457,8 +4495,6 @@ void Executor::terminateStateOnError(ExecutionState &state,
     const std::string ext = terminationTypeFileExtension(terminationType);
     // use user provided suffix from klee_report_error()
     const char * file_suffix = suffix ? suffix : ext.c_str();
-    if (_add_visited_flags)
-      _visitedBBsTerminate.merge(state.visitedBBs);
     interpreterHandler->processTestCase(state, msg.str().c_str(), file_suffix);
   }
 

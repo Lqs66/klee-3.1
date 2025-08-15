@@ -122,6 +122,9 @@ private:
   TimerGroup timers;
   std::unique_ptr<ExecutionTree> executionTree;
 
+  std::vector<std::pair<ExecutionState *, bool>> delayedStates; // delayed states to generate test case
+  bool delayedGenTestCase = false;
+
   /// Used to track states that have been added during the current
   /// instructions step. 
   /// \invariant \ref addedStates is a subset of \ref states. 

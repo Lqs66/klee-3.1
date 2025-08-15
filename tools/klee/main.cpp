@@ -303,7 +303,6 @@ extern cl::opt<std::string> splitEntryPoint;
 extern cl::opt<unsigned> MaxCallDepth;
 }
 
-extern std::set<llvm::BasicBlock *> _visitedBBsTerminate;
 
 /***/
 
@@ -1657,12 +1656,6 @@ int main(int argc, char **argv, char **envp) {
 
   uint64_t coveredBBs =
   interpreter->bbCoverage.size();
-  if(coveredBBs == 0) {
-    coveredBBs = _visitedBBsTerminate.size();
-  }
-  // for (const auto &bb : _visitedBBsTerminate) {
-  //   llvm::outs() << "KLEE: found basic block: " << bb->getName() << "\n";
-  // }
   delete interpreter;
 
   uint64_t queries =
