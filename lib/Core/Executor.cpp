@@ -4128,6 +4128,42 @@ void Executor::doDumpStates() {
             break;
         }
     }
+
+    size_t minSelect = 50;
+    // find remaining delayed states
+    std::vector<ExecutionState *> delayedRemain;
+    for (auto *state : delayedStatesSet) {
+      if (std::find(selected.begin(), selected.end(), state) == selected.end()) {
+        delayedRemain.push_back(state);
+      }
+    }
+    // find remaining incompleted states
+    std::vector<ExecutionState *> incompletedRemain;
+    for (auto *state : allStates) {
+      if (delayedStatesSet.find(state) == delayedStatesSet.end() &&
+          std::find(selected.begin(), selected.end(), state) == selected.end()) {
+        incompletedRemain.push_back(state);
+      }
+    }
+
+    std::random_device rd;
+    std::mt19937 g(rd());
+    std::shuffle(delayedRemain.begin(), delayedRemain.end(), g);
+    for (auto *state : delayedRemain) {
+      if (selected.size() >= minSelect) break;
+      selected.push_back(state);
+      delayedStatesSet.insert(state);
+    }
+    std::shuffle(incompletedRemain.begin(), incompletedRemain.end(), g);
+    for (auto *state : incompletedRemain) {
+      if (selected.size() >= minSelect) break;
+      selected.push_back(state);
+    }
+    // remove selected states from allStates
+    for (auto *state : selected) {
+      allStates.erase(std::remove(allStates.begin(), allStates.end(), state), allStates.end());
+    }
+
     delayedStates.clear();
     delayedGenTestCase = false;
     // Terminate selected states with dumping
