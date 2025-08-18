@@ -1932,6 +1932,8 @@ void Executor::concreteCall(ExecutionState &state, KInstruction *ki, Function *f
   delete shadowState;
 }
 
+std::set<Function*> _calledFunctions;
+
 void Executor::executeCall(ExecutionState &state, KInstruction *ki, Function *f,
                            std::vector<ref<Expr>> &arguments) {
   Instruction *i = ki->inst;
@@ -2241,6 +2243,9 @@ void Executor::executeCall(ExecutionState &state, KInstruction *ki, Function *f,
       return;
     }
   
+    if (!state.isConcrete)
+      _calledFunctions.insert(f);
+
     // FIXME: I'm not really happy about this reliance on prevPC but it is ok, I
     // guess. This just done to avoid having to pass KInstIterator everywhere
     // instead of the actual instruction, since we can't make a KInstIterator
@@ -2429,15 +2434,11 @@ Function *Executor::getTargetFunction(Value *calledVal) {
   }
 }
 
-extern std::set<llvm::BasicBlock*> _all_bbs_start_from_entry;
-
 void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
   Instruction *i = ki->inst;
   if (EnableSplit && MaxCallDepth > 0) {
     llvm::BasicBlock *bb = i->getParent();
-    if (_all_bbs_start_from_entry.find(bb) != _all_bbs_start_from_entry.end()) {
-      state.visitedBBs.insert(bb);
-    }
+    state.visitedBBs.insert(bb);
   }
   switch (i->getOpcode()) {
     // Control flow

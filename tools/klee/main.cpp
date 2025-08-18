@@ -1058,6 +1058,7 @@ static void replaceOrRenameFunction(llvm::Module *module,
 }
 
 std::set<llvm::BasicBlock*> _all_bbs_start_from_entry;
+extern std::set<Function*> _calledFunctions;
 
 static std::set<llvm::BasicBlock*> allBasicBlocksStartFromEntry(llvm::Function *entry, unsigned maxDepth){
   std::set<llvm::BasicBlock*> visitedBBs;
@@ -1081,7 +1082,7 @@ static std::set<llvm::BasicBlock*> allBasicBlocksStartFromEntry(llvm::Function *
                 if (auto *MDS = dyn_cast<MDString>(targets->getOperand(idx))){
                   std::string targetName = MDS->getString().str();
                   if (auto *targetFn = module->getFunction(targetName)){
-                    if (targetFn->isDeclaration()) continue;
+                    if (targetFn->isDeclaration() || (!_calledFunctions.empty() && _calledFunctions.find(targetFn) == _calledFunctions.end())) continue;
                     workList.push(std::make_pair(targetFn, depth + 1));
                     // llvm::outs() << " -- Found target function: " << targetName << " with depth: " << depth + 1 << "\n";
                   }
@@ -1090,7 +1091,7 @@ static std::set<llvm::BasicBlock*> allBasicBlocksStartFromEntry(llvm::Function *
             }
           }else{
             if (auto callee = call->getCalledFunction()){
-              if (callee->isDeclaration()) continue;
+              if (callee->isDeclaration() || (!_calledFunctions.empty() && _calledFunctions.find(callee) == _calledFunctions.end())) continue;
               workList.push(std::make_pair(callee, depth + 1));
             }
           }
@@ -1507,16 +1508,6 @@ int main(int argc, char **argv, char **envp) {
 
   externalsAndGlobalsCheck(finalModule);
 
-  uint32_t totalBBs = 0;
-  if (!splitEntryPoint.empty() && MaxCallDepth > 0) {
-    llvm::Function* splitEntryFn = finalModule->getFunction(splitEntryPoint);
-    _all_bbs_start_from_entry = allBasicBlocksStartFromEntry(splitEntryFn, MaxCallDepth);
-    totalBBs = _all_bbs_start_from_entry.size();
-    // for (const auto &bb : _all_bbs_start_from_entry) {
-    //   llvm::errs() << "KLEE: found basic block: " << bb->getName() << "\n";
-    // }
-  }
-
   std::vector<bool> replayPath;
   if (!ReplayPathFile.empty()) {
     KleeHandler::loadPathFile(ReplayPathFile, replayPath);
@@ -1630,6 +1621,13 @@ int main(int argc, char **argv, char **envp) {
     }
   }
 
+  uint32_t totalBBs = 0;
+  if (!splitEntryPoint.empty() && MaxCallDepth > 0) {
+    llvm::Function* splitEntryFn = finalModule->getFunction(splitEntryPoint);
+    _all_bbs_start_from_entry = allBasicBlocksStartFromEntry(splitEntryFn, MaxCallDepth);
+    totalBBs = _all_bbs_start_from_entry.size();
+  }
+
   auto endTime = std::time(nullptr);
   { // output end and elapsed time
     std::uint32_t h;
@@ -1654,8 +1652,11 @@ int main(int argc, char **argv, char **envp) {
     delete[] pArgv[i];
   delete[] pArgv;
 
-  uint64_t coveredBBs =
-  interpreter->bbCoverage.size();
+  std::set<llvm::BasicBlock*> coveredBBSet;
+  std::set_intersection(interpreter->bbCoverage.begin(), interpreter->bbCoverage.end(),
+                        _all_bbs_start_from_entry.begin(), _all_bbs_start_from_entry.end(),
+                        std::inserter(coveredBBSet, coveredBBSet.begin()));
+  uint64_t coveredBBs = coveredBBSet.size();
   delete interpreter;
 
   uint64_t queries =
