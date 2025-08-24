@@ -4097,7 +4097,7 @@ void Executor::doDumpStates() {
     // Greedy selection for 100 states with maximum union of visitedBBs
     std::set<llvm::BasicBlock *> covered;
     std::vector<ExecutionState *> selected;
-    size_t maxSelect = 100;
+    size_t maxSelect = 400;
 
     while (selected.size() < maxSelect && !allStates.empty()) {
         ExecutionState *best = nullptr;
@@ -4129,7 +4129,6 @@ void Executor::doDumpStates() {
         }
     }
 
-    size_t minSelect = 50;
     // find remaining delayed states
     std::vector<ExecutionState *> delayedRemain;
     for (auto *state : delayedStatesSet) {
@@ -4149,6 +4148,7 @@ void Executor::doDumpStates() {
     std::random_device rd;
     std::mt19937 g(rd());
     std::shuffle(delayedRemain.begin(), delayedRemain.end(), g);
+    size_t minSelect = 298;
     for (auto *state : delayedRemain) {
       if (selected.size() >= minSelect) break;
       selected.push_back(state);
