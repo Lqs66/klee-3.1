@@ -615,3 +615,12 @@ int munmap(void*start, size_t length) {
   errno = EPERM;
   return -1;
 }
+
+/* pthread stubs */
+#include <pthread.h>
+
+int pthread_cond_wait(pthread_cond_t *cond, pthread_mutex_t *mutex) __attribute__((weak));
+int pthread_cond_wait(pthread_cond_t *cond, pthread_mutex_t *mutex) {
+  klee_warning_once("silently ignoring (returning 0)");
+  return 0;
+}

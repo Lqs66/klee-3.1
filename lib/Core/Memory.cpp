@@ -391,6 +391,15 @@ ref<Expr> ObjectState::read8(ref<Expr> offset) const {
         "the constraint solver -- large symbolic arrays may cause significant "
         "performance issues: %s",
         size, allocInfo.c_str());
+    
+    std::string offsetStr;
+    llvm::raw_string_ostream offsetStream(offsetStr);
+    offsetStream << offset;
+    offsetStream.flush();
+    klee_warning_once(
+        nullptr,
+        "Symbolic read8 offset expression: %s",
+        offsetStr.c_str());
   }
 
   return ReadExpr::create(getUpdates(), ZExtExpr::create(offset, Expr::Int32));
@@ -435,6 +444,15 @@ void ObjectState::write8(ref<Expr> offset, ref<Expr> value) {
         "the constraint solver -- large symbolic arrays may cause significant "
         "performance issues: %s",
         size, allocInfo.c_str());
+
+    std::string offsetStr;
+    llvm::raw_string_ostream offsetStream(offsetStr);
+    offsetStream << offset;
+    offsetStream.flush();
+    klee_warning_once(
+        nullptr,
+        "Symbolic read8 offset expression: %s",
+        offsetStr.c_str());
   }
 
   updates.extend(ZExtExpr::create(offset, Expr::Int32), value);

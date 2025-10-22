@@ -34,6 +34,8 @@
 #include <cvc5/cvc5.h>
 
 #include <set> 
+#include <stack>
+#include <unordered_map>
 
 namespace {
   llvm::cl::opt<unsigned> CVC5VerbosityLevel(
@@ -69,8 +71,9 @@ private:
   
   bool validateCVC5Model(cvc5::Term &theModel);
 
+  enum class VisitState { UNVISITED, VISITING, DONE };
   void addFPCastAssertions(const std::vector<cvc5::Term>& terms);
-  void collectAndAddFPCastAssertions(const cvc5::Term& t, std::set<cvc5::Term>& visited);
+  // void collectAndAddFPCastAssertions(const cvc5::Term& t, std::set<uint64_t>& visited);
   
 public:
   CVC5SolverImpl();
@@ -349,22 +352,33 @@ bool CVC5SolverImpl::validateCVC5Model(cvc5::Term &theModel) {
   return success;
 }
 
-void CVC5SolverImpl::collectAndAddFPCastAssertions(const cvc5::Term& t, std::set<cvc5::Term>& visited) {
-    if (visited.count(t)) return;
-    visited.insert(t);
-    auto it = builder->fpToBvAssertions.find(t);
-    if (it != builder->fpToBvAssertions.end()) {
-        solver->assertFormula(it->second);
-    }
-    for (size_t i = 0; i < t.getNumChildren(); ++i) {
-        collectAndAddFPCastAssertions(t[i], visited);
-    }
-}
+// void CVC5SolverImpl::collectAndAddFPCastAssertions(const cvc5::Term& t,
+//                                                    std::set<uint64_t>& visited) {
+//     if (visited.count(t.getId())) return;
+//     visited.insert(t.getId());
+
+//     auto it = builder->fpToBvAssertions.find(t);
+//     if (it != builder->fpToBvAssertions.end()) {
+//         solver->assertFormula(it->second);
+//     }
+
+//     for (size_t i = 0; i < t.getNumChildren(); ++i) {
+//         collectAndAddFPCastAssertions(t[i], visited);
+//     }
+// }
+
+// void CVC5SolverImpl::addFPCastAssertions(const std::vector<cvc5::Term>& terms) {
+//     std::set<uint64_t> visited;
+//     for (const auto& t : terms) {
+//         collectAndAddFPCastAssertions(t, visited);
+//     }
+// }
 
 void CVC5SolverImpl::addFPCastAssertions(const std::vector<cvc5::Term>& terms) {
-    std::set<cvc5::Term> visited;
-    for (const auto& t : terms) {
-        collectAndAddFPCastAssertions(t, visited);
+    // Simply add all FP-to-BV assertions directly
+    // No need to traverse the term tree - just assert all conversions that were created
+    for (const auto& pair : builder->fpToBvAssertions) {
+        solver->assertFormula(pair.second);
     }
 }
 
