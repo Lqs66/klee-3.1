@@ -4504,7 +4504,13 @@ void Executor::terminateStateOnError(ExecutionState &state,
       klee_message("ERROR: (location information missing) %s", message.c_str());
     }
     llvm::outs() << "state ID: " << state.getID() << "\n";
-    llvm::outs() << *lastInst << "\n";
+    llvm::outs() << "Instruction: " << *lastInst << "\n";
+    if (lastInst->getParent()) {
+      llvm::outs() << "Basic Block: " << lastInst->getParent()->getName() << "\n";
+      if (lastInst->getParent()->getParent()) {
+        llvm::outs() << "Function: " << lastInst->getParent()->getParent()->getName() << "\n";
+      }
+    }
     llvm::outs() << "Call stack:\n";
     for(auto it = state.stack.begin(); it != state.stack.end(); ++it){
       llvm::outs() << "  " << it->kf->function->getName() << "\n";
