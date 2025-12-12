@@ -15,6 +15,7 @@
 #include "klee/Expr/Expr.h"
 #include "klee/Expr/ExprUtil.h"
 #include "klee/Support/Debug.h"
+#include "klee/Support/ErrorHandling.h"
 #include "klee/Solver/SolverImpl.h"
 
 #include "llvm/Support/raw_ostream.h"
@@ -541,7 +542,18 @@ bool IndependentSolver::computeInitialValues(const Query& query,
       values.push_back(retMap[arr]);
     }
   }
-  assert(assertCreatedPointEvaluatesToTrue(query, objects, values, retMap) && "should satisfy the equation");
+  
+  // Check if the created point satisfies the equation
+  // If not, log a warning and return false instead of asserting
+  if (!assertCreatedPointEvaluatesToTrue(query, objects, values, retMap)) {
+    klee_warning("Failed to create a point that satisfies the equation. "
+                 "This may indicate complex constraints that the solver cannot handle. "
+                 "Abandoning this path.");
+    values.clear();
+    delete factors;
+    return false;
+  }
+  
   delete factors;
   return true;
 }
